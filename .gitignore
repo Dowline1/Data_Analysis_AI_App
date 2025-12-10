@@ -1,0 +1,137 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+.venv-1/
+venv/
+ENV/
+env/
+.virtualenv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Markdown planning files
+ASSIGNMENT_PLAN.md
+IMPLEMENTATION_CHECKLIST.md
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Data files (except samples)
+data/output/*
+!data/output/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+
+# Generated reports
+reports/*.pdf
+reports/*.html
+!reports/README.md
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+temp/
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Package manager
+uv.lock
+poetry.lock
+Pipfile.lock
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# pytype
+.pytype/
+
+# Pyre type checker
+.pyre/
+
+# Distribution / packaging
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Translations
+*.mo
+*.pot
+
+# Scrapy
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Database
+*.db
+*.sqlite3
+
+# API Keys (backup protection)
+*_api_key.txt
+secrets.json
+credentials.json
