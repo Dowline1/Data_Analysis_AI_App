@@ -45,9 +45,21 @@ env/
 .ipynb_checkpoints/
 *.ipynb
 
-# Markdown planning files
+# Markdown planning files (keep only main README.md for submission)
 ASSIGNMENT_PLAN.md
 IMPLEMENTATION_CHECKLIST.md
+NOTES.md
+TODO.md
+PROGRESS.md
+*_NOTES.md
+docs/*.md
+!docs/architecture_diagram.*
+
+# Test scripts and development files
+test_*.py
+dev_*.py
+scratch_*.py
+experiments/
 
 # Testing
 .pytest_cache/
@@ -61,11 +73,21 @@ htmlcov/
 logs/
 *.log.*
 
-# Data files (except samples)
+# Data files - keep folders but not contents
 data/output/*
 !data/output/.gitkeep
 data/cache/*
 !data/cache/.gitkeep
+data/sample_statements/*
+!data/sample_statements/.gitkeep
+
+# Bank statements and personal data (never upload!)
+*.pdf
+*.csv
+*.xlsx
+*.xls
+*statement*
+*bank*
 
 # Generated reports
 reports/*.pdf
