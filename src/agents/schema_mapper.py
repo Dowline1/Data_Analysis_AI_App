@@ -85,6 +85,7 @@ Please extract all transactions from this statement.""")
     def extract_from_dataframe(self, df: pd.DataFrame, file_type: str) -> List[Dict]:
         """
         Extract transactions from a DataFrame (CSV or Excel).
+        Processes in batches for large DataFrames.
         
         Args:
             df: Pandas DataFrame with bank statement data
@@ -93,24 +94,42 @@ Please extract all transactions from this statement.""")
         Returns:
             List of transaction dictionaries
         """
-        logger.info(f"Extracting transactions from {file_type} DataFrame with {len(df)} rows")
-        
-        # Convert DataFrame to a readable string format for the LLM
-        # Include column names and first 50 rows (or all if less)
-        sample_size = min(50, len(df))
-        raw_data = df.head(sample_size).to_string()
-        
-        # If DataFrame is large, add a note
-        if len(df) > sample_size:
-            raw_data += f"\n\n... and {len(df) - sample_size} more rows with similar structure"
+        logger.info(f"Extracting transactions from {file_type} DataFrame with {len(df)} rows, {len(df.columns)} columns")
         
         columns_str = ", ".join(df.columns.tolist())
         
-        return self._extract_with_llm(file_type, columns_str, raw_data)
+        # For small dataframes, process all at once
+        if len(df) <= 100:
+            raw_data = df.to_string()
+            return self._extract_with_llm(file_type, columns_str, raw_data)
+        
+        # For large dataframes, process in batches
+        logger.info(f"Large DataFrame detected, processing in batches")
+        batch_size = 100
+        all_transactions = []
+        
+        for batch_num in range(0, len(df), batch_size):
+            batch_df = df.iloc[batch_num:batch_num + batch_size]
+            batch_end = min(batch_num + batch_size, len(df))
+            
+            logger.info(f"Processing rows {batch_num + 1} to {batch_end}")
+            
+            # Include headers in each batch for context
+            raw_data = f"Rows {batch_num + 1} to {batch_end}:\n{batch_df.to_string()}"
+            
+            batch_transactions = self._extract_with_llm(file_type, columns_str, raw_data)
+            
+            if batch_transactions:
+                logger.info(f"Extracted {len(batch_transactions)} transactions from batch")
+                all_transactions.extend(batch_transactions)
+        
+        logger.info(f"Total extracted: {len(all_transactions)} transactions from all batches")
+        return all_transactions
     
     def extract_from_text(self, text: str, file_type: str = 'pdf') -> List[Dict]:
         """
         Extract transactions from raw text (usually from PDF).
+        Uses chunking for large documents to extract all transactions.
         
         Args:
             text: Raw text extracted from bank statement
@@ -121,13 +140,50 @@ Please extract all transactions from this statement.""")
         """
         logger.info(f"Extracting transactions from {file_type} text ({len(text)} chars)")
         
-        # For very long text, we might need to chunk it
-        # For now, let's take first 8000 chars which should cover most statements
-        if len(text) > 8000:
-            logger.warning(f"Text is {len(text)} chars, truncating to 8000 for LLM processing")
-            text = text[:8000] + "\n\n... (truncated)"
+        # Gemini has 1M token context, but let's chunk large documents for efficiency
+        # ~4 chars per token, so 32k chars = ~8k tokens (safe for most models)
+        max_chunk_size = 32000
         
-        return self._extract_with_llm(file_type, "N/A (text-based)", text)
+        if len(text) <= max_chunk_size:
+            # Small enough to process in one go
+            return self._extract_with_llm(file_type, "N/A (text-based)", text)
+        
+        # For large documents, split into chunks and extract from each
+        logger.info(f"Text is {len(text)} chars, splitting into chunks for complete extraction")
+        
+        all_transactions = []
+        chunk_size = max_chunk_size
+        overlap = 500  # Overlap to avoid cutting transactions
+        
+        for i in range(0, len(text), chunk_size - overlap):
+            chunk = text[i:i + chunk_size]
+            chunk_num = (i // (chunk_size - overlap)) + 1
+            total_chunks = (len(text) + chunk_size - overlap - 1) // (chunk_size - overlap)
+            
+            logger.info(f"Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} chars)")
+            
+            chunk_transactions = self._extract_with_llm(file_type, "N/A (text-based)", chunk)
+            
+            if chunk_transactions:
+                logger.info(f"Extracted {len(chunk_transactions)} transactions from chunk {chunk_num}")
+                all_transactions.extend(chunk_transactions)
+        
+        # Remove duplicates that might appear in overlapping sections
+        # Deduplicate by date+description+amount
+        seen = set()
+        unique_transactions = []
+        
+        for txn in all_transactions:
+            # Create a unique key from transaction details
+            key = (str(txn.get('date')), txn.get('description', ''), txn.get('amount', 0))
+            if key not in seen:
+                seen.add(key)
+                unique_transactions.append(txn)
+        
+        if len(all_transactions) != len(unique_transactions):
+            logger.info(f"Removed {len(all_transactions) - len(unique_transactions)} duplicate transactions from overlapping chunks")
+        
+        return unique_transactions
     
     def _extract_with_llm(self, file_type: str, columns: str, raw_data: str) -> List[Dict]:
         """

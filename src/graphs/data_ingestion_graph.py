@@ -104,11 +104,18 @@ class DataIngestionGraph:
             result = self.file_parser.parse_file(state['file_path'])
             
             state['file_type'] = result['file_type']
-            state['raw_data'] = result['raw_text']  # Store raw text
             state['extracted_columns'] = result['columns']
             
-            # Temporarily store DataFrame for extraction (not in state schema)
-            state['_temp_dataframe'] = result['dataframe']
+            # Store either raw text OR structured data (prefer structured)
+            df = result['dataframe']
+            if df is not None and len(df) > 0:
+                # We have structured table data - convert to JSON for state storage
+                logger.info(f"Storing structured table data: {len(df)} rows, {len(df.columns)} columns")
+                state['raw_data'] = df.to_json(orient='records', date_format='iso')
+            else:
+                # No tables found, use raw text
+                logger.info(f"Storing raw text data: {len(result['raw_text'])} chars")
+                state['raw_data'] = result['raw_text']
             
             logger.info(f"Successfully parsed {result['file_type']} file")
             
@@ -129,15 +136,33 @@ class DataIngestionGraph:
             logger.info(f"Applying reflection feedback: {reflection_context}")
         
         try:
-            # Choose extraction method based on available data
-            if state.get('_temp_dataframe') is not None and len(state['_temp_dataframe']) > 0:
-                transactions = self.schema_mapper.extract_from_dataframe(
-                    state['_temp_dataframe'], 
-                    state['file_type']
-                )
+            # Choose extraction method based on data format
+            raw_data = state['raw_data']
+            
+            # Check if raw_data is JSON (structured table)
+            if raw_data and raw_data.strip().startswith('['):
+                # It's JSON - convert back to DataFrame
+                import json
+                import pandas as pd
+                try:
+                    data_list = json.loads(raw_data)
+                    df = pd.DataFrame(data_list)
+                    logger.info(f"Using structured DataFrame extraction ({len(df)} rows, {len(df.columns)} columns)")
+                    transactions = self.schema_mapper.extract_from_dataframe(
+                        df, 
+                        state['file_type']
+                    )
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse JSON, falling back to text extraction")
+                    transactions = self.schema_mapper.extract_from_text(
+                        raw_data, 
+                        state['file_type']
+                    )
             else:
+                # It's raw text
+                logger.info(f"Using text extraction ({len(raw_data)} chars)")
                 transactions = self.schema_mapper.extract_from_text(
-                    state['raw_data'], 
+                    raw_data, 
                     state['file_type']
                 )
             
@@ -161,7 +186,12 @@ class DataIngestionGraph:
             validation_result = self.validator.validate(state['transactions'])
             
             state['data_quality_score'] = validation_result['quality_score']
-            state['validation_passed'] = validation_result['is_valid']  # Temporary field
+            state['validation_summary'] = {
+                'quality_score': validation_result['quality_score'],
+                'is_valid': validation_result['is_valid'],
+                'issues_found': validation_result['issues'],
+                'suggestions': validation_result['suggestions']
+            }
             
             # Store validation feedback for potential reflection
             if not validation_result['is_valid']:
@@ -175,7 +205,7 @@ class DataIngestionGraph:
         except Exception as e:
             logger.error(f"Validation failed: {e}")
             state['errors'].append(f"Validation error: {str(e)}")
-            state['validation_passed'] = False
+            state['data_quality_score'] = 0
         
         return state
     
@@ -183,18 +213,47 @@ class DataIngestionGraph:
         """Node: Prepare data for human review (HITL checkpoint)."""
         logger.info("Requesting human review of extracted transactions")
         
-        # This node prepares the state for human review
-        # The graph will interrupt here, allowing the UI to display data
-        # and collect user feedback
-        # GUARDRAIL #2: Apply PII masking to approved transactions
-        state['transactions'] = self.guardrails.mask_pii(state['transactions'])
+        # Calculate monthly totals for human review
+        import pandas as pd
+        from datetime import datetime
         
-        pii_summary = self.guardrails.get_pii_masking_summary()
-        if pii_summary:
-            logger.info(f"PII masking applied: {pii_summary}")
-        
-        
-        state['human_review_requested'] = True
+        transactions = state['transactions']
+        if transactions:
+            df = pd.DataFrame(transactions)
+            df['date'] = pd.to_datetime(df['date'])
+            df['month'] = df['date'].dt.to_period('M')
+            
+            # Calculate monthly totals
+            monthly_summary = df.groupby('month').agg({
+                'amount': ['sum', 'count']
+            }).round(2)
+            
+            # Convert to dict for storage
+            monthly_totals = {}
+            for month, row in monthly_summary.iterrows():
+                month_str = str(month)
+                monthly_totals[month_str] = {
+                    'total': float(row[('amount', 'sum')]),
+                    'income': float(df[(df['month'] == month) & (df['amount'] > 0)]['amount'].sum()),
+                    'expenses': float(abs(df[(df['month'] == month) & (df['amount'] < 0)]['amount'].sum())),
+                    'net': float(df[df['month'] == month]['amount'].sum()),
+                    'transaction_count': int(row[('amount', 'count')])
+                }
+            
+            # Store in validation_summary for human review
+            if state['validation_summary'] is None:
+                state['validation_summary'] = {}
+            
+            state['validation_summary']['monthly_totals'] = monthly_totals
+            state['validation_summary']['total_transactions'] = len(transactions)
+            state['validation_summary']['date_range'] = {
+                'start': str(df['date'].min().date()),
+                'end': str(df['date'].max().date())
+            }
+            
+            logger.info(f"Prepared monthly summary for {len(monthly_totals)} months")
+            for month, data in monthly_totals.items():
+                logger.info(f"  {month}: €{data['net']:.2f} net ({data['transaction_count']} transactions)")
         
         return state
     
@@ -220,10 +279,12 @@ class DataIngestionGraph:
         """
         max_iterations = 3
         current_iteration = state.get('retry_count', 0)
+        quality_threshold = 70
         
-        # If validation passed, proceed to human review
-        if state.get('validation_passed', False):
-            logger.info("Validation passed - proceeding to human review")
+        # If validation passed (quality score >= threshold), proceed to human review
+        quality_score = state.get('data_quality_score', 0)
+        if quality_score >= quality_threshold:
+            logger.info(f"Validation passed (score {quality_score} >= {quality_threshold}) - proceeding to human review")
             return "proceed"
         
         # If no transactions extracted, don't loop (extraction won't improve)
@@ -237,7 +298,7 @@ class DataIngestionGraph:
             return "proceed"
         
         # Reflection loop: try again with feedback
-        logger.info(f"Data quality below threshold - initiating reflection loop (iteration {current_iteration + 1})")
+        logger.info(f"Data quality below threshold (score {quality_score} < {quality_threshold}) - initiating reflection loop (iteration {current_iteration + 1})")
         return "reflect"
     
     def _check_human_approval(self, state: DataIngestionState) -> Literal["approved", "rejected", "waiting"]:
@@ -266,13 +327,13 @@ class DataIngestionGraph:
     
     # === Public Methods ===
     
-    def invoke(self, file_path: str, config: dict = None):
+    def invoke(self, file_path: str, thread_id: str = "default"):
         """
         Run the data ingestion pipeline.
         
         Args:
             file_path: Path to the file to ingest
-            config: Optional config with thread_id for checkpointing
+            thread_id: Thread ID for checkpointing
             
         Returns:
             Final state after ingestion
@@ -280,33 +341,29 @@ class DataIngestionGraph:
         initial_state = DataIngestionState(
             file_path=file_path,
             file_type=None,
-            parsed_data=None,
-            raw_text=None,
-            columns_found=[],
+            raw_data=None,
+            extracted_columns=[],
             transactions=[],
-            validation_score=0.0,
-            validation_passed=False,
-            extraction_attempts=0,
-            reflection_notes=[],
-            errors=[],
-            human_review_requested=False,
+            data_quality_score=0.0,
             human_approved=None,
             human_feedback=None,
-            ingestion_complete=False
+            validation_summary=None,
+            errors=[],
+            reflection_notes=[],
+            retry_count=0
         )
         
-        if config is None:
-            config = {"configurable": {"thread_id": "default"}}
+        config = {"configurable": {"thread_id": thread_id}}
         
         return self.graph.invoke(initial_state, config)
     
-    def stream(self, file_path: str, config: dict = None):
+    def stream(self, file_path: str, thread_id: str = "default"):
         """
         Stream the data ingestion pipeline (for real-time updates in UI).
         
         Args:
             file_path: Path to the file to ingest
-            config: Optional config with thread_id for checkpointing
+            thread_id: Thread ID for checkpointing
             
         Yields:
             State updates as they happen
@@ -326,25 +383,23 @@ class DataIngestionGraph:
             retry_count=0
         )
         
-        if config is None:
-            config = {"configurable": {"thread_id": "default"}}
+        config = {"configurable": {"thread_id": thread_id}}
         
         for state in self.graph.stream(initial_state, config):
             yield state
     
-    def update_human_approval(self, approved: bool, feedback: str = None, config: dict = None):
+    def update_human_approval(self, thread_id: str, approved: bool, feedback: str = None):
         """
         Update the graph state with human approval/rejection.
         
         This is called after the graph interrupts at the HITL checkpoint.
         
         Args:
+            thread_id: Thread ID (must match original invoke/stream)
             approved: True if approved, False if rejected
             feedback: Optional feedback from human
-            config: Config with thread_id to resume correct execution
         """
-        if config is None:
-            config = {"configurable": {"thread_id": "default"}}
+        config = {"configurable": {"thread_id": thread_id}}
         
         # Update state and resume
         update_state = {
@@ -352,4 +407,4 @@ class DataIngestionGraph:
             "human_feedback": feedback
         }
         
-        return self.graph.invoke(update_state, config)
+        return self.graph.update_state(config, update_state)

@@ -103,8 +103,29 @@ class FileParser:
                     if page_text:
                         raw_text += page_text + "\n"
                     
-                    # Try to extract tables from this page
-                    tables = page.extract_tables()
+                    # Try to extract tables from this page with more aggressive settings
+                    # Many bank statements don't have clear table borders
+                    table_settings = {
+                        "vertical_strategy": "lines_strict",
+                        "horizontal_strategy": "lines_strict",
+                        "snap_tolerance": 3,
+                        "join_tolerance": 3,
+                        "edge_min_length": 3,
+                        "min_words_vertical": 3,
+                        "min_words_horizontal": 1,
+                    }
+                    
+                    # Try with strict settings first
+                    tables = page.extract_tables(table_settings)
+                    
+                    # If no tables found, try with more lenient settings
+                    if not tables:
+                        table_settings = {
+                            "vertical_strategy": "text",
+                            "horizontal_strategy": "text",
+                            "intersection_tolerance": 15,
+                        }
+                        tables = page.extract_tables(table_settings)
                     
                     if tables:
                         logger.info(f"Found {len(tables)} tables on page {page_num}")
@@ -113,7 +134,22 @@ class FileParser:
                             if table and len(table) > 0:
                                 # Convert table to DataFrame
                                 # First row might be headers or might be data - we'll handle this later
-                                df_table = pd.DataFrame(table[1:], columns=table[0])
+                                # Make column names unique by appending index if duplicates exist
+                                headers = table[0]
+                                if headers:
+                                    seen = {}
+                                    unique_headers = []
+                                    for col in headers:
+                                        col_str = str(col) if col is not None else 'col'
+                                        if col_str in seen:
+                                            seen[col_str] += 1
+                                            unique_headers.append(f"{col_str}_{seen[col_str]}")
+                                        else:
+                                            seen[col_str] = 0
+                                            unique_headers.append(col_str)
+                                    df_table = pd.DataFrame(table[1:], columns=unique_headers)
+                                else:
+                                    df_table = pd.DataFrame(table[1:])
                                 
                                 # Skip if table is too small (probably not transaction data)
                                 if len(df_table) < 2:
@@ -133,7 +169,21 @@ class FileParser:
                 combined_df = all_tables[0]
             else:
                 logger.info(f"Combining {len(all_tables)} tables")
-                combined_df = pd.concat(all_tables, ignore_index=True)
+                # Tables from different pages might have different column counts
+                # Find the table with the most columns as it likely has complete headers
+                max_cols = max(len(df.columns) for df in all_tables)
+                logger.info(f"Table column counts: {[len(df.columns) for df in all_tables]}, using {max_cols} columns")
+                
+                # Pad smaller tables with empty columns
+                padded_tables = []
+                for df in all_tables:
+                    if len(df.columns) < max_cols:
+                        # Add empty columns to match max
+                        for i in range(len(df.columns), max_cols):
+                            df[f'col_{i}'] = None
+                    padded_tables.append(df)
+                
+                combined_df = pd.concat(padded_tables, ignore_index=True)
             
             # Clean up the DataFrame
             # Remove completely empty rows

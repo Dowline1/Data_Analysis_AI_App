@@ -107,22 +107,26 @@ Provide validation results as JSON only.""")
                 "transactions_summary": transactions_summary
             })
             
-            logger.info(f"LLM Quality Score: {llm_result['quality_score']}/100")
-            logger.info(f"Data Valid: {llm_result['is_valid']}")
+            quality_score = llm_result['quality_score']
+            # Use score-based validation, not LLM's boolean opinion
+            is_valid = quality_score >= self.min_quality_score
+            
+            logger.info(f"LLM Quality Score: {quality_score}/100")
+            logger.info(f"Data Valid: {is_valid}")
             
             # Combine stats and LLM results
             validation_result = {
-                "is_valid": llm_result['is_valid'],
-                "quality_score": llm_result['quality_score'],
+                "is_valid": is_valid,
+                "quality_score": quality_score,
                 "statistics": stats,
                 "issues": llm_result['issues_found'],
                 "suggestions": llm_result['suggestions'],
                 "reflection": llm_result['reflection'],
-                "needs_reextraction": llm_result['quality_score'] < self.min_quality_score
+                "needs_reextraction": quality_score < self.min_quality_score
             }
             
             if validation_result['needs_reextraction']:
-                logger.warning(f"Quality score {llm_result['quality_score']} below threshold {self.min_quality_score}")
+                logger.warning(f"Quality score {quality_score} below threshold {self.min_quality_score}")
             else:
                 logger.info("Data validation passed")
             
