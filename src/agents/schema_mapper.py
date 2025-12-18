@@ -155,7 +155,13 @@ Please extract all transactions from this statement.""")
             })
             
             # Extract transactions from result
-            transactions = result.get('transactions', [])
+            # Result is already a dict from Pydantic parser
+            if isinstance(result, dict):
+                transactions = result.get('transactions', [])
+            else:
+                # If result is the TransactionsOutput object directly
+                transactions = result.transactions if hasattr(result, 'transactions') else []
+            
             logger.info(f"Successfully extracted {len(transactions)} transactions")
             
             # Convert to list of dicts
