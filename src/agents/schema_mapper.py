@@ -32,7 +32,7 @@ class TransactionsOutput(BaseModel):
 class SchemaMapperAgent:
     """
     ReAct agent that intelligently extracts transactions from any bank statement format.
-    Works with PDFs, CSVs, or Excel files regardless of their column names or structure.
+    Works with CSVs or Excel files regardless of their column names or structure.
     """
     
     def __init__(self):
@@ -50,7 +50,7 @@ class SchemaMapperAgent:
 Your job is to analyze the provided bank statement data and extract ALL transactions.
 
 Bank statements can come in many formats:
-- PDF text (like Revolut, AIB, Bank of Ireland)
+- CSV or Excel files (from any bank)
 - CSV files with various column names
 - Excel spreadsheets
 
@@ -84,8 +84,8 @@ Please extract all transactions from this statement.""")
     
     def extract_from_dataframe(self, df: pd.DataFrame, file_type: str) -> List[Dict]:
         """
-        Extract transactions from a DataFrame (CSV or Excel).
-        Processes in batches for large DataFrames.
+        Extract transactions from a DataFrame using smart column mapping.
+        Uses LLM once to identify columns, then Python to extract all rows.
         
         Args:
             df: Pandas DataFrame with bank statement data
@@ -96,37 +96,324 @@ Please extract all transactions from this statement.""")
         """
         logger.info(f"Extracting transactions from {file_type} DataFrame with {len(df)} rows, {len(df.columns)} columns")
         
-        columns_str = ", ".join(df.columns.tolist())
+        # Step 1: Use LLM once to map columns (fast!)
+        column_mapping = self._identify_columns(df)
         
-        # For small dataframes, process all at once
-        if len(df) <= 100:
-            raw_data = df.to_string()
-            return self._extract_with_llm(file_type, columns_str, raw_data)
+        if not column_mapping:
+            logger.warning("Failed to identify columns, falling back to full LLM extraction")
+            # Fallback to old method for small dataframes
+            if len(df) <= 100:
+                columns_str = ", ".join(df.columns.tolist())
+                raw_data = df.to_string()
+                return self._extract_with_llm(file_type, columns_str, raw_data)
+            else:
+                logger.error("Cannot process large DataFrame without column mapping")
+                return []
         
-        # For large dataframes, process in batches
-        logger.info(f"Large DataFrame detected, processing in batches")
-        batch_size = 100
-        all_transactions = []
+        # Step 2: Use pure Python to extract all transactions (instant!)
+        logger.info(f"Using column mapping to extract {len(df)} transactions")
+        transactions = self._extract_with_mapping(df, column_mapping)
         
-        for batch_num in range(0, len(df), batch_size):
-            batch_df = df.iloc[batch_num:batch_num + batch_size]
-            batch_end = min(batch_num + batch_size, len(df))
-            
-            logger.info(f"Processing rows {batch_num + 1} to {batch_end}")
-            
-            # Include headers in each batch for context
-            raw_data = f"Rows {batch_num + 1} to {batch_end}:\n{batch_df.to_string()}"
-            
-            batch_transactions = self._extract_with_llm(file_type, columns_str, raw_data)
-            
-            if batch_transactions:
-                logger.info(f"Extracted {len(batch_transactions)} transactions from batch")
-                all_transactions.extend(batch_transactions)
-        
-        logger.info(f"Total extracted: {len(all_transactions)} transactions from all batches")
-        return all_transactions
+        logger.info(f"Extracted {len(transactions)} transactions using smart mapping")
+        return transactions
     
-    def extract_from_text(self, text: str, file_type: str = 'pdf') -> List[Dict]:
+    def _identify_columns(self, df: pd.DataFrame) -> Dict[str, str]:
+        """
+        Use LLM once to identify which columns contain transaction data.
+        
+        Args:
+            df: DataFrame to analyze
+            
+        Returns:
+            Dict mapping field names to column names: {'date': 'Transaction Date', 'amount': 'Amount', ...}
+        """
+        logger.info("Identifying column mapping using LLM")
+        
+        # Skip potential header/footer rows that may have empty or non-transaction data
+        # Find rows that look like actual transaction data (have non-empty values in multiple columns)
+        # Count non-empty string values (not just non-null)
+        def count_non_empty(row):
+            return sum(1 for val in row if pd.notna(val) and str(val).strip() != '')
+        
+        non_empty_counts = df.apply(count_non_empty, axis=1)
+        potential_data_rows = df[non_empty_counts >= 3]  # Rows with at least 3 non-empty values
+        
+        if len(potential_data_rows) == 0:
+            logger.warning("No rows with sufficient non-empty values found")
+            return None
+            
+        # Show LLM data from different parts of the dataset
+        logger.info(f"Found {len(potential_data_rows)} potential data rows out of {len(df)} total")
+        
+        # Take samples from beginning, middle, and end of potential data rows
+        sample_indices = []
+        if len(potential_data_rows) > 0:
+            sample_indices.append(0)
+        if len(potential_data_rows) > 10:
+            sample_indices.append(len(potential_data_rows) // 2)
+        if len(potential_data_rows) > 20:
+            sample_indices.append(len(potential_data_rows) - 1)
+        
+        sample_rows = potential_data_rows.iloc[sample_indices] if sample_indices else potential_data_rows.head(5)
+        
+        # Format column names for display, handling empty/unnamed columns
+        col_display = []
+        for i, col in enumerate(df.columns):
+            if col == '' or col is None or str(col).strip() == '':
+                col_display.append(f"Column_{i} (unnamed)")
+            else:
+                col_display.append(col)
+        
+        columns_info = "Here are the column names and sample transaction data from a bank statement.\n"
+        columns_info += f"Total columns: {len(df.columns)}\n\n"
+        columns_info += f"Column names: {', '.join(col_display)}\n\n"
+        columns_info += f"Sample transaction rows (showing only non-empty fields):\n"
+        
+        # Show each sample row with only non-empty columns
+        for i, idx in enumerate(sample_rows.index[:5], 1):  # Show up to 5 samples
+            row = df.loc[idx]
+            columns_info += f"\nTransaction {i}:\n"
+            for j, col in enumerate(df.columns):
+                val = row[col]
+                if pd.notna(val) and str(val).strip() != '':
+                    display_name = col_display[j]
+                    columns_info += f"  {display_name}: {val!r}\n"
+        
+        from langchain_core.output_parsers import JsonOutputParser
+        from pydantic import BaseModel, Field
+        from langchain_core.prompts import ChatPromptTemplate
+        
+        class ColumnMapping(BaseModel):
+            date_column: str = Field(description="Name of column containing transaction dates")
+            description_column: str = Field(description="Name of column containing transaction descriptions/merchants")
+            amount_column: str = Field(description="Name of column containing transaction amounts")
+            debit_column: str | None = Field(default=None, description="Name of column for debits (if separate from amount)")
+            credit_column: str | None = Field(default=None, description="Name of column for credits (if separate from amount)")
+            category_column: str | None = Field(default=None, description="Name of column for transaction category/type (e.g., 'Transfer', 'Card Payment', 'Groceries')")
+            type_column: str | None = Field(default=None, description="Name of column for transaction type (e.g., 'Debit', 'Credit', 'ATM')")
+            fee_column: str | None = Field(default=None, description="Name of column for transaction fees")
+            currency_column: str | None = Field(default=None, description="Name of column for currency")
+            balance_column: str | None = Field(default=None, description="Name of column for running balance after transaction")
+            status_column: str | None = Field(default=None, description="Name of column for transaction status (e.g., 'COMPLETED', 'PENDING')")
+        
+        parser = JsonOutputParser(pydantic_object=ColumnMapping)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are analyzing a bank statement table to identify ALL relevant columns.
+
+Look at the sample transaction data and identify these columns (REQUIRED fields first):
+
+REQUIRED:
+1. DATE column: Transaction dates ("1 Nov 2025", "2024-11-01", etc.)
+2. DESCRIPTION column: Merchant names or transaction descriptions ("Tesco", "Levi's", etc.)
+3. AMOUNT column: Monetary amounts ("€18.02", "-50.00", "100.50", etc.)
+   - OR separate DEBIT and CREDIT columns if amounts are split
+
+OPTIONAL (identify if present):
+4. CATEGORY column: Transaction category/type ("Transfer", "Card Payment", "Groceries", "Shopping", etc.)
+5. TYPE column: Transaction method/type ("Debit", "Credit", "ATM", "Online", etc.)
+6. FEE column: Transaction fees or charges
+7. CURRENCY column: Currency code ("EUR", "USD", "GBP", etc.)
+8. BALANCE column: Running account balance after transaction
+9. STATUS column: Transaction status ("COMPLETED", "PENDING", "FAILED", etc.)
+
+Return the EXACT column names as they appear in the column list.
+For optional fields, return null if not present.
+If a column is named "Column_X (unnamed)", use that exact string.
+
+{format_instructions}"""),
+            ("user", "{columns_info}")
+        ])
+        
+        chain = prompt | self.llm | parser
+        
+        try:
+            result = chain.invoke({
+                "columns_info": columns_info,
+                "format_instructions": parser.get_format_instructions()
+            })
+            
+            logger.info(f"Raw LLM column mapping: {result}")
+            
+            # Map display names back to actual column names
+            # Handle "Column_X (unnamed)" format
+            def map_to_actual_column(display_name):
+                if display_name and "Column_" in display_name and "(unnamed)" in display_name:
+                    # Extract index from "Column_X (unnamed)"
+                    try:
+                        idx = int(display_name.split("_")[1].split(" ")[0])
+                        return df.columns[idx]
+                    except:
+                        pass
+                return display_name
+            
+            mapped_result = {
+                'date_column': map_to_actual_column(result.get('date_column')),
+                'description_column': map_to_actual_column(result.get('description_column')),
+                'amount_column': map_to_actual_column(result.get('amount_column')),
+                'debit_column': map_to_actual_column(result.get('debit_column')) if result.get('debit_column') else None,
+                'credit_column': map_to_actual_column(result.get('credit_column')) if result.get('credit_column') else None,
+                'category_column': map_to_actual_column(result.get('category_column')) if result.get('category_column') else None,
+                'type_column': map_to_actual_column(result.get('type_column')) if result.get('type_column') else None,
+                'fee_column': map_to_actual_column(result.get('fee_column')) if result.get('fee_column') else None,
+                'currency_column': map_to_actual_column(result.get('currency_column')) if result.get('currency_column') else None,
+                'balance_column': map_to_actual_column(result.get('balance_column')) if result.get('balance_column') else None,
+                'status_column': map_to_actual_column(result.get('status_column')) if result.get('status_column') else None,
+            }
+            
+            logger.info(f"Mapped to actual columns: {mapped_result}")
+            logger.info(f"Optional metadata columns found: category={mapped_result.get('category_column')}, type={mapped_result.get('type_column')}, fee={mapped_result.get('fee_column')}, currency={mapped_result.get('currency_column')}, balance={mapped_result.get('balance_column')}, status={mapped_result.get('status_column')}")
+            return mapped_result
+            
+        except Exception as e:
+            logger.error(f"Failed to identify columns: {e}")
+            return None
+    
+    def _extract_with_mapping(self, df: pd.DataFrame, mapping: Dict) -> List[Dict]:
+        """
+        Extract transactions using identified column mapping (pure Python - fast!).
+        
+        Args:
+            df: DataFrame with transaction data
+            mapping: Column mapping from _identify_columns
+            
+        Returns:
+            List of transaction dictionaries
+        """
+        transactions = []
+        
+        date_col = mapping.get('date_column')
+        desc_col = mapping.get('description_column')
+        amount_col = mapping.get('amount_column')
+        debit_col = mapping.get('debit_column')
+        credit_col = mapping.get('credit_column')
+        
+        logger.info(f"Extracting using mapping: date={date_col}, desc={desc_col}, amount={amount_col}")
+        
+        # Filter to rows that have non-empty values in the key columns
+        # This skips header/footer rows
+        df_filtered = df[
+            df[date_col].notna() & 
+            (df[date_col].astype(str).str.strip() != '') &
+            df[desc_col].notna() &
+            (df[desc_col].astype(str).str.strip() != '') &
+            df[amount_col].notna() &
+            (df[amount_col].astype(str).str.strip() != '')
+        ].copy()
+        
+        logger.info(f"Filtered to {len(df_filtered)} rows with non-empty values in key columns")
+        
+        for idx, row in df_filtered.iterrows():
+            try:
+                # Get date
+                date_val = row.get(date_col)
+                if pd.isna(date_val) or date_val is None or str(date_val).strip() == '':
+                    continue
+                
+                # Parse date
+                date_str = str(date_val).strip()
+                if not date_str or date_str.lower() == 'nan' or date_str.lower() == 'none':
+                    continue
+                    
+                date_obj = pd.to_datetime(date_str, errors='coerce')
+                
+                if pd.isna(date_obj):
+                    continue
+                
+                # Get description
+                description = str(row.get(desc_col, '')).strip()
+                if not description or description.lower() in ['nan', 'none', '']:
+                    continue
+                
+                # Get amount
+                if debit_col and credit_col:
+                    # Separate debit/credit columns
+                    debit = pd.to_numeric(row.get(debit_col, 0), errors='coerce')
+                    credit = pd.to_numeric(row.get(credit_col, 0), errors='coerce')
+                    
+                    if not pd.isna(debit) and debit != 0:
+                        amount = -abs(float(debit))  # Debits are negative
+                    elif not pd.isna(credit) and credit != 0:
+                        amount = abs(float(credit))  # Credits are positive
+                    else:
+                        continue
+                else:
+                    # Single amount column
+                    amount_val = row.get(amount_col)
+                    amount = pd.to_numeric(amount_val, errors='coerce')
+                    
+                    if pd.isna(amount) or amount == 0:
+                        continue
+                    
+                    amount = float(amount)
+                
+                # Check if we have a transaction type column to determine sign
+                type_col = mapping.get('type_column')
+                transaction_type = None
+                if type_col and type_col in df.columns:
+                    type_val = row.get(type_col)
+                    if pd.notna(type_val) and str(type_val).strip():
+                        transaction_type = str(type_val).strip().lower()
+                        
+                        # Apply transaction type to amount sign
+                        # If type indicates expense/debit, make amount negative
+                        # If type indicates income/credit, make amount positive
+                        if transaction_type in ['debit', 'expense', 'withdrawal', 'payment', 'spent', 'out', 'dr']:
+                            amount = -abs(amount)  # Force negative for expenses
+                        elif transaction_type in ['credit', 'income', 'deposit', 'received', 'in', 'cr']:
+                            amount = abs(amount)  # Force positive for income
+                
+                # Create transaction with all available metadata
+                transaction = {
+                    'date': date_obj.to_pydatetime(),
+                    'description': description,
+                    'amount': amount,
+                    'category': None  # Will be enriched below
+                }
+                
+                # Add optional metadata if columns are present
+                category_col = mapping.get('category_column')
+                if category_col and category_col in df.columns:
+                    cat_val = row.get(category_col)
+                    if pd.notna(cat_val) and str(cat_val).strip():
+                        transaction['category'] = str(cat_val).strip()
+                
+                if transaction_type:
+                    transaction['type'] = transaction_type
+                
+                fee_col = mapping.get('fee_column')
+                if fee_col and fee_col in df.columns:
+                    fee_val = pd.to_numeric(row.get(fee_col), errors='coerce')
+                    if pd.notna(fee_val):
+                        transaction['fee'] = float(fee_val)
+                
+                currency_col = mapping.get('currency_column')
+                if currency_col and currency_col in df.columns:
+                    curr_val = row.get(currency_col)
+                    if pd.notna(curr_val) and str(curr_val).strip():
+                        transaction['currency'] = str(curr_val).strip()
+                
+                balance_col = mapping.get('balance_column')
+                if balance_col and balance_col in df.columns:
+                    bal_val = pd.to_numeric(row.get(balance_col), errors='coerce')
+                    if pd.notna(bal_val):
+                        transaction['balance'] = float(bal_val)
+                
+                status_col = mapping.get('status_column')
+                if status_col and status_col in df.columns:
+                    status_val = row.get(status_col)
+                    if pd.notna(status_val) and str(status_val).strip():
+                        transaction['status'] = str(status_val).strip()
+                
+                transactions.append(transaction)
+                
+            except Exception as e:
+                logger.debug(f"Skipping row {idx}: {e}")
+                continue
+        
+        return transactions
+    
+    def extract_from_text(self, text: str, file_type: str = 'csv') -> List[Dict]:
         """
         Extract transactions from raw text (usually from PDF).
         Uses chunking for large documents to extract all transactions.
@@ -250,7 +537,7 @@ Please extract all transactions from this statement.""")
         Args:
             parsed_data: Dictionary containing:
                 - 'dataframe': pandas DataFrame (if CSV/Excel)
-                - 'raw_text': raw text (if PDF)
+                - 'raw_text': raw text (if available)
                 - 'file_type': type of file
                 
         Returns:

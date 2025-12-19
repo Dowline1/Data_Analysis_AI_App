@@ -9,12 +9,12 @@
 
 ## Overview
 
-A smart AI agent system that analyzes your bank statements and provides financial insights. Upload your bank statement (PDF, CSV, or Excel) and get instant analysis of your spending patterns, subscriptions, and financial health.
+A smart AI agent system that analyzes your bank statements and provides financial insights. Upload your bank statement (CSV or Excel) and get instant analysis of your spending patterns, subscriptions, and financial health.
 
 ## Features
 
 ### Core Functionality
-- 📄 **Universal File Support** - Works with PDF, CSV, and Excel bank statements from any bank
+- 📄 **Universal File Support** - Works with CSV and Excel bank statements from any bank
 - 🤖 **Multi-Agent System** - Specialized agents handle different parts of the analysis
 - ✅ **Human-in-the-Loop** - You review and approve the extracted data before analysis
 - 🛡️ **Safety Guardrails** - Input validation, PII protection, and data quality checks
@@ -61,7 +61,7 @@ streamlit run app.py
 ```
 
 Then:
-1. Upload your bank statement (PDF, CSV, or Excel)
+1. Upload your bank statement (CSV or Excel)
 2. Review the extracted transactions
 3. Confirm the data is correct
 4. Get instant financial insights!
@@ -90,7 +90,7 @@ Data_Analysis_AI_App/
 
 Currently implemented:
 - ✅ Project structure
-- ✅ PDF/CSV/Excel file parser
+- ✅ CSV/Excel file parser
 - ✅ Configuration management
 - ✅ Logging system
 - ✅ State definitions

@@ -309,7 +309,7 @@ Generate 2-3 subscription insights.""")
     
     def _generate_recommendations(self, context: Dict) -> List[str]:
         """
-        Generate actionable recommendations using LLM.
+        Generate specific, actionable money-saving recommendations using LLM.
         
         Args:
             context: Financial data context
@@ -318,41 +318,68 @@ Generate 2-3 subscription insights.""")
             List of recommendations
         """
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a financial advisor providing actionable recommendations.
-Generate 3-5 specific, actionable recommendations to improve financial health.
+            ("system", """You are a financial advisor providing specific, actionable money-saving recommendations.
+Analyze the spending data and provide personalized advice to reduce expenses and increase savings.
+
 Focus on:
-- Reducing unnecessary spending
-- Increasing savings
-- Managing subscriptions
-- Improving financial habits
+1. Specific categories where spending is high
+2. Practical ways to reduce costs in those categories
+3. Subscription optimization opportunities
+4. Realistic savings goals
+5. Budget adjustments
 
 Format: Return a JSON array of recommendation strings.
-Start each with an action verb (e.g., "Review", "Consider", "Set aside")."""),
-            ("user", """Based on this financial summary:
+Each recommendation should be:
+- Specific (mention actual amounts and categories)
+- Actionable (clear steps to take)
+- Realistic (achievable changes)
 
-Health Score: {health_score}/100
-Savings Rate: {savings_pct}%
-Total Subscriptions: €{subscriptions}/month
-Spending Volatility: {volatility}
+Start each with an action verb (e.g., "Reduce", "Consider", "Set aside", "Review", "Cancel")."""),
+            ("user", """Based on this detailed financial data:
 
-Generate 3-5 actionable recommendations.""")
+Financial Health Score: {health_score}/100
+Current Savings Rate: {savings_pct}%
+Net Balance: €{net_balance}
+
+Top Spending Categories:
+{top_categories}
+
+Subscriptions: {subscription_count} active subscriptions costing €{subscriptions}/month
+Spending Trend: {spending_trend}
+Daily Average Spend: €{daily_avg}
+
+Generate 5-7 specific, actionable recommendations to save money and improve financial health.
+Be specific about categories and amounts where possible.""")
         ])
         
         health = context.get('health', {})
         subs = context.get('subscriptions', {})
         trends = context.get('trends', {})
+        basic = context.get('basic', {})
+        spending = context.get('spending', {})
+        
+        # Get top spending categories with amounts
+        category_spending = spending.get('spending_by_category', {})
+        top_categories = '\n'.join([
+            f"- {k}: €{v:.2f}" 
+            for k, v in list(category_spending.items())[:5]
+        ]) or "No category data available"
         
         try:
             chain = prompt | self.llm
             response = chain.invoke({
                 'health_score': health.get('health_score', 0),
                 'savings_pct': health.get('savings_percentage', 0),
+                'net_balance': basic.get('net_balance', 0),
+                'top_categories': top_categories,
+                'subscription_count': subs.get('count', 0),
                 'subscriptions': subs.get('total_subscription_cost', 0),
-                'volatility': 'high' if trends.get('spending_volatility', 0) > 50 else 'moderate'
+                'spending_trend': trends.get('spending_trend', 'stable'),
+                'daily_avg': trends.get('daily_spending_avg', 0)
             })
             
             recommendations = self._parse_insights_response(response.content)
-            return recommendations[:5]
+            return recommendations[:7]
             
         except Exception as e:
             logger.error(f"Error generating recommendations: {e}")

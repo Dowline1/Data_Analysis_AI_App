@@ -20,7 +20,7 @@ class FileValidationGuardrail:
     Prevents malicious files and enforces size/type limits.
     """
     
-    ALLOWED_EXTENSIONS = {'.pdf', '.csv', '.xlsx', '.xls'}
+    ALLOWED_EXTENSIONS = {'.csv', '.xlsx', '.xls'}
     SUSPICIOUS_PATTERNS = [
         b'<script',  # JavaScript
         b'<?php',    # PHP code

@@ -23,7 +23,7 @@ class AppState(TypedDict):
     """
     # Input
     file_path: str
-    file_type: str  # 'csv', 'xlsx', or 'pdf'
+    file_type: str  # 'csv' or 'xlsx'
     
     # Data extraction phase
     raw_data: Optional[str]  # Raw extracted text/data from file
@@ -93,8 +93,25 @@ class AnalysisState(TypedDict):
     previous_month_spend: Optional[float]
     top_categories: Optional[List[Dict]]
     subscriptions: Optional[List[Dict]]
+    subscription_total_cost: Optional[float]
     financial_health_score: Optional[float]
+    financial_health_rating: Optional[str]
+    financial_health_details: Optional[Dict]
+    
+    # Metrics from calculate_metrics node
+    basic_metrics: Optional[Dict]
+    spending_metrics: Optional[Dict]
+    income_metrics: Optional[Dict]
+    trend_metrics: Optional[Dict]
+    
+    # Category summary from categorize_transactions
+    category_summary: Optional[Dict]
+    
+    # Alerts
+    alerts: Annotated[List[str], operator.add]
+    
     insights: Annotated[List[str], operator.add]
     recommendations: Annotated[List[str], operator.add]
     errors: Annotated[List[str], operator.add]
     reflection_notes: Annotated[List[str], operator.add]
+    analysis_complete: Optional[bool]

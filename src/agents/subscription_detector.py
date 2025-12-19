@@ -8,11 +8,22 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from collections import defaultdict
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from pydantic import BaseModel, Field
 
+from src.utils.config import Config
 from src.utils.logger import setup_logger
 from src.state.app_state import Transaction
 
 logger = setup_logger(__name__)
+
+
+class SubscriptionValidation(BaseModel):
+    """Schema for LLM subscription validation."""
+    is_subscription: bool = Field(description="True if this is a real subscription/recurring service")
+    reason: str = Field(description="Brief explanation of why this is or isn't a subscription")
 
 
 class SubscriptionDetectorAgent:
@@ -21,29 +32,128 @@ class SubscriptionDetectorAgent:
     Uses pattern matching and temporal analysis to identify subscriptions.
     """
     
-    def __init__(self, min_occurrences: int = 2, max_day_variance: int = 5):
+    def __init__(self, min_occurrences: int = 3, max_day_variance: int = 3, use_llm_validation: bool = True):
         """
         Initialize detector.
         
         Args:
-            min_occurrences: Minimum times a transaction must repeat to be considered recurring
-            max_day_variance: Maximum variance in days between occurrences
+            min_occurrences: Minimum times a transaction must repeat to be considered recurring (default 3)
+            max_day_variance: Maximum variance in days between occurrences (default 3)
+            use_llm_validation: Use LLM to validate if patterns are real subscriptions (default True)
         """
         self.min_occurrences = min_occurrences
         self.max_day_variance = max_day_variance
+        self.use_llm_validation = use_llm_validation
+
+        # Categories to exclude from subscription detection unless keyword matches
+        self.excluded_categories = [
+            'Groceries', 'Dining', 'Restaurants', 'Supermarket', 'Fuel', 'ATM', 'Transfer',
+            'Hardware', 'Home Improvement', 'Travel', 'Hotel', 'Airline', 'Medical', 'Pharmacy',
+            'Education', 'Tuition', 'Gift', 'Charity', 'Tax', 'Government', 'Insurance', 'Loan',
+            'Mortgage', 'Rent', 'Credit Card Payment', 'Bank Fee', 'Cash', 'Withdrawal', 'Deposit',
+            'Refund', 'Salary', 'Income', 'Bonus', 'Investment', 'Stock', 'Bond', 'Dividend',
+            'Utilities', 'Electricity', 'Gas', 'Water', 'Internet', 'Mobile', 'Phone', 'Cable',
+            'Entertainment', 'Sports', 'Leisure', 'Miscellaneous', 'Other'
+        ]
+
+        # Keywords that indicate a subscription service
+        self.subscription_keywords = [
+            'subscription', 'recurring', 'monthly', 'annual', 'service', 'membership', 'plan',
+            'netflix', 'spotify', 'apple', 'amazon', 'prime', 'google', 'microsoft', 'adobe',
+            'cloud', 'tv', 'music', 'video', 'gym', 'fitness', 'magazine', 'newspaper', 'news',
+            'insurance', 'storage', 'dropbox', 'office', '365', 'zoom', 'discord', 'slack', 'hulu',
+            'disney', 'paramount', 'crunchyroll', 'audible', 'kindle', 'playstation', 'xbox', 'nintendo',
+            'canva', 'patreon', 'substack', 'linkedin', 'coursera', 'udemy', 'masterclass', 'calm', 'headspace'
+        ]
+        
+        # Initialize LLM for intelligent validation
+        if self.use_llm_validation:
+            self.llm = ChatGoogleGenerativeAI(
+                model=Config.GEMINI_MODEL,
+                google_api_key=Config.GOOGLE_API_KEY,
+                temperature=0.3
+            )
+            logger.info("Subscription detector using LLM validation for intelligent filtering")
+        else:
+            self.llm = None
     
     def _convert_numpy_types(self, obj):
         """Recursively convert numpy types to native Python types for serialization."""
         if isinstance(obj, dict):
             return {k: self._convert_numpy_types(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+        if isinstance(obj, list):
             return [self._convert_numpy_types(item) for item in obj]
-        elif isinstance(obj, (np.integer, np.floating)):
+        if isinstance(obj, (np.integer, np.floating)):
             return obj.item()
-        elif isinstance(obj, np.ndarray):
+        if isinstance(obj, np.ndarray):
             return obj.tolist()
-        else:
-            return obj
+        return obj
+
+    def _llm_confirms_subscription(
+        self,
+        description: str,
+        category: str,
+        occurrences: int,
+        amount_mean: float,
+        amount_std: float,
+        dates: List[str],
+        intervals: List[int],
+        reason: str,
+        has_keyword: bool
+    ) -> bool:
+        """Use LLM to validate borderline cases with strong subscription signals."""
+        if not (self.use_llm_validation and self.llm and has_keyword):
+            return False
+
+        prompt = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                "You are a financial assistant that identifies recurring subscriptions. "
+                "ONLY respond with valid JSON matching this schema: {{\"is_subscription\": bool, \"reason\": str}}."
+            ),
+            (
+                "human",
+                "Description: {description}\n"
+                "Category: {category}\n"
+                "Occurrences: {occurrences}\n"
+                "Amount mean: {amount_mean}\n"
+                "Amount std: {amount_std}\n"
+                "Dates: {dates}\n"
+                "Intervals (days): {intervals}\n"
+                "Reason for review: {reason}\n"
+                "Is this a true subscription/recurring service?"
+            )
+        ])
+
+        parser = JsonOutputParser(pydantic_object=SubscriptionValidation)
+        chain = prompt | self.llm | parser
+
+        payload = {
+            'description': description,
+            'category': category or 'Unknown',
+            'occurrences': occurrences,
+            'amount_mean': f"{amount_mean:.2f}",
+            'amount_std': f"{amount_std:.2f}",
+            'dates': dates,
+            'intervals': intervals if intervals else ['N/A'],
+            'reason': reason
+        }
+
+        try:
+            validation = chain.invoke(payload)
+        except Exception as exc:
+            logger.warning(f"LLM validation failed for '{description}': {exc}")
+            return False
+
+        if isinstance(validation, dict):
+            validation = SubscriptionValidation(**validation)
+
+        if validation.is_subscription:
+            logger.debug(f"LLM validated '{description}' as subscription: {validation.reason}")
+            return True
+
+        logger.debug(f"LLM rejected '{description}' as subscription: {validation.reason}")
+        return False
     
     def detect_subscriptions(self, transactions: List[Transaction]) -> Dict:
         """
@@ -109,57 +219,104 @@ class SubscriptionDetectorAgent:
             return subscriptions
         
         # Execute grouping logic
-        # Group by description and round amount to handle small variations
-        expenses['amount_rounded'] = expenses['amount'].round(0)
+        # Group by description (don't round amount - subscriptions should be exact)
+        grouped = expenses.groupby('description')
         
-        # Group similar transactions
-        grouped = expenses.groupby(['description', 'amount_rounded'])
-        
-        for (description, amount), group in grouped:
-            if len(group) < self.min_occurrences:
+        for description, group in grouped:
+            occurrences = len(group)
+            if occurrences < self.min_occurrences:
                 continue
-            
-            # Execute temporal analysis
+
+            category = group['category'].iloc[0] if 'category' in group.columns else 'Other'
+            desc_lower = description.lower()
+            has_subscription_keyword = any(keyword in desc_lower for keyword in self.subscription_keywords)
+
+            # Filter 1: Skip categories typically not subscriptions (unless keyword match)
+            if category in self.excluded_categories and not has_subscription_keyword:
+                continue
+
+            # Filter 2: Skip restaurants/dining (even if they recur)
+            restaurant_keywords = ['restaurant', 'tavern', 'grill', 'cafe', 'coffee',
+                                   'pizza', 'burger', 'bbq', 'diner', 'bistro', 'bar']
+            if any(keyword in desc_lower for keyword in restaurant_keywords):
+                continue
+
+            amounts = group['amount'].values
+            amount_std = amounts.std()
+            amount_mean = amounts.mean()
+            validated_by_llm = False
+
             dates = sorted(group['date'].tolist())
-            
-            # Calculate intervals between occurrences
-            intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates)-1)]
-            
+            str_dates = [str(d.date()) for d in dates]
+            if len(str_dates) < 2:
+                continue
+
+            intervals = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
             if not intervals:
                 continue
-            
-            # Check if intervals are roughly consistent (recurring pattern)
+
+            variance_ratio = abs(amount_std) / (abs(amount_mean) + 1e-9)
+            if variance_ratio > 0.30:
+                reason = f"Amount variance ratio {variance_ratio:.2f} exceeds threshold"
+                if self._llm_confirms_subscription(
+                    description,
+                    category,
+                    occurrences,
+                    amount_mean,
+                    amount_std,
+                    str_dates,
+                    intervals,
+                    reason,
+                    has_subscription_keyword
+                ):
+                    validated_by_llm = True
+                else:
+                    continue
+
             avg_interval = sum(intervals) / len(intervals)
             max_variance = max(abs(interval - avg_interval) for interval in intervals)
-            
-            if max_variance <= self.max_day_variance:
-                # This is a recurring transaction!
-                
-                # Determine frequency
-                frequency = self._determine_frequency(avg_interval)
-                
-                # Calculate monthly cost estimate
-                monthly_cost = self._calculate_monthly_cost(abs(amount), avg_interval)
-                
-                # Get category
-                category = group['category'].iloc[0] if 'category' in group.columns else 'Other'
-                
-                subscription = {
-                    'description': description,
-                    'amount': float(amount),
-                    'frequency': frequency,
-                    'interval_days': round(avg_interval, 1),
-                    'occurrences': len(group),
-                    'first_seen': str(dates[0].date()),
-                    'last_seen': str(dates[-1].date()),
-                    'estimated_monthly_cost': round(monthly_cost, 2),
-                    'category': category,
-                    'is_regular': max_variance <= 2  # Very regular if variance < 2 days
-                }
-                
-                subscriptions.append(subscription)
-                
-                logger.debug(f"Detected subscription: {description} - {frequency} (€{monthly_cost:.2f}/month)")
+
+            if max_variance > self.max_day_variance:
+                reason = (
+                    f"Intervals vary by up to {max_variance:.1f} days (avg {avg_interval:.1f} days), "
+                    f"exceeding allowed {self.max_day_variance} days"
+                )
+                if self._llm_confirms_subscription(
+                    description,
+                    category,
+                    occurrences,
+                    amount_mean,
+                    amount_std,
+                    str_dates,
+                    intervals,
+                    reason,
+                    has_subscription_keyword
+                ):
+                    validated_by_llm = True
+                else:
+                    continue
+
+            frequency = self._determine_frequency(avg_interval)
+            amount = amount_mean
+            monthly_cost = self._calculate_monthly_cost(abs(amount), avg_interval)
+
+            subscription = {
+                'description': description,
+                'amount': float(amount),
+                'frequency': frequency,
+                'interval_days': round(avg_interval, 1),
+                'occurrences': occurrences,
+                'first_seen': str(dates[0].date()),
+                'last_seen': str(dates[-1].date()),
+                'estimated_monthly_cost': round(monthly_cost, 2),
+                'category': category,
+                'is_regular': max_variance <= 2,
+                'amount_variance': round(float(amount_std), 2),
+                'validated_by_llm': validated_by_llm
+            }
+
+            subscriptions.append(subscription)
+            logger.debug(f"Detected subscription: {description} - {frequency} (\u20ac{monthly_cost:.2f}/month)")
         
         # Sort by monthly cost
         subscriptions.sort(key=lambda x: x['estimated_monthly_cost'], reverse=True)
