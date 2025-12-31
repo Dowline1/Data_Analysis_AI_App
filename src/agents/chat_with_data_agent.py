@@ -71,10 +71,14 @@ class ChatWithDataAgent:
         chain = self.prompt | self.llm
         try:
             response = chain.invoke({
-                'context': json.dumps(context, ensure_ascii=False)[:6000],
+                'context': json.dumps(context, ensure_ascii=False, default=str)[:6000],
                 'question': question,
             })
-            return response.content.strip()
+            # Handle both string and AIMessage responses
+            if hasattr(response, 'content'):
+                return str(response.content).strip()
+            else:
+                return str(response).strip()
         except Exception as exc:
             logger.error(f"Chat agent failed: {exc}")
             return "Sorry, I couldn't process that question right now."

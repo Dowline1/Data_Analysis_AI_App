@@ -22,6 +22,7 @@ class TransactionSchema(BaseModel):
     description: str = Field(description="Transaction description or merchant name")
     amount: float = Field(description="Transaction amount (positive for money in, negative for money out)")
     category: Optional[str] = Field(default=None, description="Transaction category if identifiable")
+    account_type: Optional[str] = Field(default=None, description="Account type: checking, savings, credit_card, etc.")
 
 
 class TransactionsOutput(BaseModel):
@@ -82,7 +83,7 @@ Raw Data:
 Please extract all transactions from this statement.""")
         ])
     
-    def extract_from_dataframe(self, df: pd.DataFrame, file_type: str) -> List[Dict]:
+    def extract_from_dataframe(self, df: pd.DataFrame, file_type: str, file_path: str = None) -> List[Dict]:
         """
         Extract transactions from a DataFrame using smart column mapping.
         Uses LLM once to identify columns, then Python to extract all rows.
@@ -90,13 +91,18 @@ Please extract all transactions from this statement.""")
         Args:
             df: Pandas DataFrame with bank statement data
             file_type: Type of file ('csv' or 'xlsx')
+            file_path: Optional file path to help detect account type
             
         Returns:
             List of transaction dictionaries
         """
         logger.info(f"Extracting transactions from {file_type} DataFrame with {len(df)} rows, {len(df.columns)} columns")
         
-        # Step 1: Use LLM once to map columns (fast!)
+        # Step 1: Detect account type from file name and content
+        account_type = self._detect_account_type(file_path, df)
+        logger.info(f"Detected account type: {account_type}")
+        
+        # Step 2: Use LLM once to map columns (fast!)
         column_mapping = self._identify_columns(df)
         
         if not column_mapping:
@@ -110,12 +116,37 @@ Please extract all transactions from this statement.""")
                 logger.error("Cannot process large DataFrame without column mapping")
                 return []
         
-        # Step 2: Use pure Python to extract all transactions (instant!)
+        # Step 3: Use pure Python to extract all transactions (instant!)
         logger.info(f"Using column mapping to extract {len(df)} transactions")
-        transactions = self._extract_with_mapping(df, column_mapping)
+        transactions = self._extract_with_mapping(df, column_mapping, account_type)
         
         logger.info(f"Extracted {len(transactions)} transactions using smart mapping")
         return transactions
+    
+    def _classify_account_type(self, account_name: str) -> str:
+        """
+        Classify account type from account name/label.
+        
+        Args:
+            account_name: Account name like "Credit Card *1234", "Checking", "Current Account"
+            
+        Returns:
+            Normalized account type: 'credit_card', 'checking', 'savings', 'current', or original name
+        """
+        account_lower = account_name.lower()
+        
+        # Check for common patterns
+        if any(keyword in account_lower for keyword in ['credit card', 'visa', 'mastercard', 'amex', 'cc ']):
+            return 'credit_card'
+        elif any(keyword in account_lower for keyword in ['checking', 'chequing']):
+            return 'checking'
+        elif any(keyword in account_lower for keyword in ['current account', 'current']):
+            return 'current'
+        elif 'saving' in account_lower:
+            return 'savings'
+        else:
+            # Return a cleaned version of the account name
+            return account_name.replace(' ', '_').lower()
     
     def _identify_columns(self, df: pd.DataFrame) -> Dict[str, str]:
         """
@@ -195,6 +226,7 @@ Please extract all transactions from this statement.""")
             currency_column: str | None = Field(default=None, description="Name of column for currency")
             balance_column: str | None = Field(default=None, description="Name of column for running balance after transaction")
             status_column: str | None = Field(default=None, description="Name of column for transaction status (e.g., 'COMPLETED', 'PENDING')")
+            account_name_column: str | None = Field(default=None, description="Name of column for account name/number (e.g., 'Account', 'Card Number', 'Account Name')")
         
         parser = JsonOutputParser(pydantic_object=ColumnMapping)
         
@@ -216,6 +248,7 @@ OPTIONAL (identify if present):
 7. CURRENCY column: Currency code ("EUR", "USD", "GBP", etc.)
 8. BALANCE column: Running account balance after transaction
 9. STATUS column: Transaction status ("COMPLETED", "PENDING", "FAILED", etc.)
+10. ACCOUNT_NAME column: Account name/number ("Checking *1234", "Visa *5678", "Current Account", etc.)
 
 Return the EXACT column names as they appear in the column list.
 For optional fields, return null if not present.
@@ -259,6 +292,7 @@ If a column is named "Column_X (unnamed)", use that exact string.
                 'currency_column': map_to_actual_column(result.get('currency_column')) if result.get('currency_column') else None,
                 'balance_column': map_to_actual_column(result.get('balance_column')) if result.get('balance_column') else None,
                 'status_column': map_to_actual_column(result.get('status_column')) if result.get('status_column') else None,
+                'account_name_column': map_to_actual_column(result.get('account_name_column')) if result.get('account_name_column') else None,
             }
             
             logger.info(f"Mapped to actual columns: {mapped_result}")
@@ -269,13 +303,107 @@ If a column is named "Column_X (unnamed)", use that exact string.
             logger.error(f"Failed to identify columns: {e}")
             return None
     
-    def _extract_with_mapping(self, df: pd.DataFrame, mapping: Dict) -> List[Dict]:
+    def _detect_account_type(self, file_path: str, df: pd.DataFrame) -> str:
+        """
+        Detect account type from multiple sources: file name, column data, and transaction patterns.
+        This works dynamically regardless of bank format.
+        
+        Args:
+            file_path: Path to the file (may contain hints like 'credit_card', 'checking')
+            df: DataFrame to analyze for account type hints
+            
+        Returns:
+            Account type string: 'checking', 'savings', 'credit_card', 'current', 'unknown'
+        """
+        import os
+        
+        logger.info("Detecting account type from multiple sources...")
+        
+        # Strategy 1: Check file name for hints
+        if file_path:
+            file_name = os.path.basename(file_path).lower()
+            
+            if any(keyword in file_name for keyword in ['credit', 'cc', 'visa', 'mastercard', 'amex', 'card']):
+                logger.info(f"Account type detected from filename: credit_card")
+                return 'credit_card'
+            elif any(keyword in file_name for keyword in ['checking', 'chequing', 'current']):
+                logger.info(f"Account type detected from filename: checking")
+                return 'checking'
+            elif 'saving' in file_name:
+                logger.info(f"Account type detected from filename: savings")
+                return 'savings'
+        
+        # Strategy 2: Check if there's an account name/type column
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if any(keyword in col_lower for keyword in ['account', 'card', 'product']):
+                # Check a few values to see if they indicate account type
+                sample_values = df[col].dropna().head(10).astype(str).str.lower()
+                for val in sample_values:
+                    if any(keyword in val for keyword in ['credit', 'visa', 'mastercard', 'amex', 'card']):
+                        logger.info(f"Account type detected from column '{col}': credit_card")
+                        return 'credit_card'
+                    elif any(keyword in val for keyword in ['checking', 'current', 'chequing']):
+                        logger.info(f"Account type detected from column '{col}': checking")
+                        return 'checking'
+                    elif 'saving' in val:
+                        logger.info(f"Account type detected from column '{col}': savings")
+                        return 'savings'
+        
+        # Strategy 3: Use LLM to analyze transaction patterns and descriptions
+        logger.info("Using LLM to analyze transaction patterns for account type...")
+        sample_rows = df.head(15).to_string(max_colwidth=50)
+        
+        from langchain_core.output_parsers import StrOutputParser
+        from langchain_core.prompts import ChatPromptTemplate
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """Analyze this bank statement data and determine the account type.
+
+Account types to identify:
+- credit_card: Credit card statement with purchases/payments
+- checking/current: Regular checking or current account  
+- savings: Savings account
+- unknown: Cannot determine
+
+Look for these clues:
+1. Transaction descriptions (e.g., "CREDIT CARD PAYMENT", "ATM WITHDRAWAL", "DEBIT CARD PURCHASE")
+2. Account names in columns (e.g., "Visa *1234", "Checking *5678")
+3. Balance patterns (credit cards often show purchases increasing balance)
+4. Transaction types common to specific accounts
+
+IMPORTANT: Different banks format data differently:
+- Some show credit card purchases as positive, others as negative
+- Column names vary widely
+- Look at the CONTENT and PATTERNS, not just column names
+
+Return ONLY one of these exact strings: credit_card, checking, savings, unknown"""),
+            ("user", "Sample data from statement (max 15 rows):\n\n{sample_rows}\n\nWhat type of account is this?")
+        ])
+        
+        try:
+            chain = prompt | self.llm | StrOutputParser()
+            result = chain.invoke({"sample_rows": sample_rows})
+            account_type = result.strip().lower()
+            
+            if account_type in ['credit_card', 'checking', 'savings', 'current']:
+                logger.info(f"Account type detected by LLM: {account_type}")
+                return account_type
+            else:
+                logger.warning(f"LLM returned unexpected account type: {result}, defaulting to unknown")
+                return 'unknown'
+        except Exception as e:
+            logger.error(f"Failed to detect account type with LLM: {e}")
+            return 'unknown'
+    
+    def _extract_with_mapping(self, df: pd.DataFrame, mapping: Dict, account_type: str = 'unknown') -> List[Dict]:
         """
         Extract transactions using identified column mapping (pure Python - fast!).
         
         Args:
             df: DataFrame with transaction data
             mapping: Column mapping from _identify_columns
+            account_type: Detected account type for proper sign handling
             
         Returns:
             List of transaction dictionaries
@@ -347,28 +475,72 @@ If a column is named "Column_X (unnamed)", use that exact string.
                     
                     amount = float(amount)
                 
-                # Check if we have a transaction type column to determine sign
+                # Determine account type for this transaction FIRST
+                # Priority: 1) Account name column, 2) File-level detection
+                transaction_account_type = account_type  # Default to file-level
+                account_name_str = None
+                account_name_col = mapping.get('account_name_column')
+                
+                if account_name_col and account_name_col in df.columns:
+                    account_name = row.get(account_name_col)
+                    if pd.notna(account_name) and str(account_name).strip():
+                        account_name_str = str(account_name).strip()
+                        # Classify account type from account name
+                        transaction_account_type = self._classify_account_type(account_name_str)
+                
+                # Get transaction type from column if available
                 type_col = mapping.get('type_column')
                 transaction_type = None
                 if type_col and type_col in df.columns:
                     type_val = row.get(type_col)
                     if pd.notna(type_val) and str(type_val).strip():
                         transaction_type = str(type_val).strip().lower()
-                        
-                        # Apply transaction type to amount sign
-                        # If type indicates expense/debit, make amount negative
-                        # If type indicates income/credit, make amount positive
-                        if transaction_type in ['debit', 'expense', 'withdrawal', 'payment', 'spent', 'out', 'dr']:
-                            amount = -abs(amount)  # Force negative for expenses
-                        elif transaction_type in ['credit', 'income', 'deposit', 'received', 'in', 'cr']:
-                            amount = abs(amount)  # Force positive for income
                 
+                # Apply sign conventions dynamically based on BOTH account type AND transaction type
+                # This ensures accurate balance calculations for each account type
+                
+                if transaction_account_type == 'credit_card':
+                    # CREDIT CARDS: Track debt
+                    # - Debit/Charge = Purchase = POSITIVE (increases debt owed)
+                    # - Credit/Payment = Payment = NEGATIVE (reduces debt owed)
+                    if transaction_type:
+                        if transaction_type in ['debit', 'charge', 'purchase', 'dr']:
+                            amount = abs(amount)  # Purchase increases debt
+                        elif transaction_type in ['credit', 'payment', 'cr', 'refund']:
+                            amount = -abs(amount)  # Payment reduces debt
+                        else:
+                            # Fallback: use description
+                            if 'payment' in description.lower() or 'paid' in description.lower():
+                                amount = -abs(amount)
+                            else:
+                                amount = abs(amount)
+                    else:
+                        # No transaction type, use description
+                        if 'payment' in description.lower() or 'paid' in description.lower():
+                            amount = -abs(amount)  # Payment
+                        else:
+                            amount = abs(amount)  # Purchase
+                            
+                else:
+                    # CHECKING/SAVINGS/CURRENT ACCOUNTS: Track available funds
+                    # - Debit/Withdrawal = Money out = NEGATIVE (reduces balance)
+                    # - Credit/Deposit = Money in = POSITIVE (increases balance)
+                    if transaction_type:
+                        if transaction_type in ['debit', 'withdrawal', 'payment', 'spent', 'out', 'dr']:
+                            amount = -abs(amount)  # Money out
+                        elif transaction_type in ['credit', 'deposit', 'income', 'received', 'in', 'cr']:
+                            amount = abs(amount)  # Money in
+                        # else: keep original sign from amount column
+                    # else: keep original sign from amount column
+                        
                 # Create transaction with all available metadata
                 transaction = {
                     'date': date_obj.to_pydatetime(),
                     'description': description,
                     'amount': amount,
-                    'category': None  # Will be enriched below
+                    'category': None,  # Will be enriched below
+                    'account_type': transaction_account_type,  # Per-transaction account type
+                    'account_name': account_name_str
                 }
                 
                 # Add optional metadata if columns are present

@@ -62,12 +62,24 @@ class ExpertInsightsAgent:
                     "system",
                     "You are a senior banking expert. Review the ledger and describe subscriptions, "
                     "transfers, credit-card behaviour, and risks. "
-                    "Respond ONLY in valid JSON that follows these instructions:\n{format_instructions}",
+                    "\n\nIMPORTANT CONTEXT FOR CREDIT CARDS:"
+                    "\n- Credit card accounts use DEBT tracking (positive = debt owed, negative = credit/overpayment)"
+                    "\n- A negative balance on a credit card is EXCELLENT (means overpayment/credit)"
+                    "\n- Payments to credit cards (negative amounts on CC) reduce debt and are POSITIVE behavior"
+                    "\n- High payment ratios (paying more than charged) indicate GOOD financial management"
+                    "\n- Checking/Savings use normal tracking (positive = money in, negative = money out)"
+                    "\n\nWHEN REVIEWING CREDIT CARDS:"
+                    "\n1. FIRST look at the credit_card_summary to see overall account health"
+                    "\n2. If net_balance is NEGATIVE or payment_ratio > 1.0, this is EXCELLENT management"
+                    "\n3. Frequent payments indicate RESPONSIBLE behavior, not financial problems"
+                    "\n4. Only flag as concerning if net_balance is HIGH AND POSITIVE (accumulating debt)"
+                    "\n\nRespond ONLY in valid JSON that follows these instructions:\n{format_instructions}",
                 ),
                 (
                     "human",
                     "Summary stats: {summary_stats}\n"
-                    "Account stats: {account_stats}\n"
+                    "Account breakdown: {account_stats}\n"
+                    "Credit card summary: {credit_card_summary}\n"
                     "Top merchants: {top_merchants}\n"
                     "Ledger sample (most recent first, {row_count} rows max): {ledger_sample}\n"
                     "Provide expert findings.",
@@ -97,6 +109,7 @@ class ExpertInsightsAgent:
                     "format_instructions": self.parser.get_format_instructions(),
                     "summary_stats": json.dumps(context["summary_stats"], ensure_ascii=True),
                     "account_stats": json.dumps(context["account_stats"], ensure_ascii=True),
+                    "credit_card_summary": json.dumps(context["credit_card_summary"], ensure_ascii=True),
                     "top_merchants": json.dumps(context["top_merchants"], ensure_ascii=True),
                     "ledger_sample": json.dumps(context["ledger_sample"], ensure_ascii=True),
                     "row_count": len(context["ledger_sample"]),
@@ -127,7 +140,8 @@ class ExpertInsightsAgent:
                     "description": tx.get("description", ""),
                     "amount": round(float(tx.get("amount", 0.0)), 2),
                     "category": tx.get("category") or "Uncategorized",
-                    "account": tx.get("account", "primary"),
+                    "account_type": tx.get("account_type") or "unknown",
+                    "account_name": tx.get("account_name") or tx.get("account") or "primary",
                     "type": tx.get("type", "unknown"),
                     "balance": tx.get("balance"),
                 }
@@ -135,11 +149,13 @@ class ExpertInsightsAgent:
 
         summary_stats = self._summarize(transactions)
         account_stats = self._account_breakdown(transactions)
+        credit_card_summary = self._credit_card_analysis(transactions)
         top_merchants = self._top_merchants(transactions)
 
         return {
             "summary_stats": summary_stats,
             "account_stats": account_stats,
+            "credit_card_summary": credit_card_summary,
             "top_merchants": top_merchants,
             "ledger_sample": ledger_sample,
         }
@@ -196,6 +212,122 @@ class ExpertInsightsAgent:
             stats["net_flow"] = round(stats["net_flow"], 2)
 
         return accounts
+
+    def _credit_card_analysis(self, transactions: List[Transaction]) -> Dict[str, Any]:
+        """
+        Analyze credit card behavior to provide context on debt management.
+        Emphasizes overall account health to help LLM understand overpayments are positive.
+        
+        Returns:
+            Dictionary with credit card health metrics and overall assessment
+        """
+        cc_transactions = [tx for tx in transactions if tx.get("account_type") == "credit_card"]
+        
+        if not cc_transactions:
+            return {"has_credit_cards": False}
+        
+        # Calculate by credit card account
+        cc_accounts = defaultdict(lambda: {
+            "total_charges": 0.0,
+            "total_payments": 0.0,
+            "net_balance": 0.0,
+            "transaction_count": 0
+        })
+        
+        for tx in cc_transactions:
+            account_name = tx.get("account_name", "Unknown Card")
+            amount = float(tx.get("amount", 0.0))
+            
+            cc_accounts[account_name]["transaction_count"] += 1
+            
+            if amount > 0:
+                cc_accounts[account_name]["total_charges"] += amount
+            else:
+                cc_accounts[account_name]["total_payments"] += abs(amount)
+            
+            cc_accounts[account_name]["net_balance"] += amount
+        
+        # Analyze each account and calculate overall health
+        analysis = {
+            "has_credit_cards": True,
+            "overall_assessment": "",
+            "accounts": {}
+        }
+        
+        total_net_balance = 0.0
+        total_payment_ratio = 0.0
+        excellent_count = 0
+        good_count = 0
+        
+        for account_name, stats in cc_accounts.items():
+            payment_ratio = 0
+            if stats["total_charges"] > 0:
+                payment_ratio = stats["total_payments"] / stats["total_charges"]
+            elif stats["total_payments"] > 0:
+                payment_ratio = 2.0  # Only payments, no charges = excellent
+            
+            health_status = "EXCELLENT"
+            if stats["net_balance"] <= 0:
+                health_status = "EXCELLENT - Overpaid (credit balance of €{:.2f})".format(abs(stats["net_balance"]))
+                excellent_count += 1
+            elif payment_ratio >= 1.0:
+                health_status = "EXCELLENT - Paying off fully (payment ratio: {:.1f}x)".format(payment_ratio)
+                excellent_count += 1
+            elif payment_ratio >= 0.8:
+                health_status = "GOOD - Most charges covered"
+                good_count += 1
+            elif payment_ratio >= 0.5:
+                health_status = "FAIR - Partial payment"
+            else:
+                health_status = "POOR - Debt accumulating"
+            
+            total_net_balance += stats["net_balance"]
+            total_payment_ratio += payment_ratio
+            
+            analysis["accounts"][account_name] = {
+                "total_charges": round(stats["total_charges"], 2),
+                "total_payments": round(stats["total_payments"], 2),
+                "net_balance": round(stats["net_balance"], 2),
+                "payment_ratio": round(payment_ratio, 2),
+                "health_status": health_status,
+                "transaction_count": stats["transaction_count"]
+            }
+        
+        # Generate overall assessment
+        avg_payment_ratio = total_payment_ratio / len(cc_accounts)
+        
+        if total_net_balance <= 0:
+            analysis["overall_assessment"] = (
+                f"EXCELLENT CREDIT CARD MANAGEMENT: All accounts show credit balances (total overpayment: €{abs(total_net_balance):.2f}). "
+                f"Customer is paying MORE than they charge, maintaining positive credit on cards. This is exemplary financial behavior."
+            )
+        elif excellent_count == len(cc_accounts):
+            analysis["overall_assessment"] = (
+                f"EXCELLENT CREDIT CARD MANAGEMENT: All {len(cc_accounts)} accounts show excellent payment behavior with "
+                f"payment ratios averaging {avg_payment_ratio:.1f}x. Customer is responsibly managing credit card debt."
+            )
+        elif excellent_count + good_count == len(cc_accounts):
+            analysis["overall_assessment"] = (
+                f"GOOD CREDIT CARD MANAGEMENT: {excellent_count} excellent and {good_count} good accounts. "
+                f"Net balance: €{total_net_balance:.2f}. Customer is managing credit responsibly."
+            )
+        else:
+            analysis["overall_assessment"] = (
+                f"MIXED CREDIT CARD MANAGEMENT: Net balance: €{total_net_balance:.2f}. "
+                f"Some accounts need attention. Review individual account details."
+            )
+        
+        # Add summary metrics
+        analysis["summary"] = {
+            "total_accounts": len(cc_accounts),
+            "combined_net_balance": round(total_net_balance, 2),
+            "average_payment_ratio": round(avg_payment_ratio, 2),
+            "accounts_in_credit": sum(1 for stats in cc_accounts.values() if stats["net_balance"] <= 0),
+            "excellent_accounts": excellent_count,
+            "good_accounts": good_count
+        }
+        
+        return analysis
 
     def _top_merchants(self, transactions: List[Transaction], top_n: int = 10) -> List[Dict[str, Any]]:
         counter = Counter()

@@ -55,6 +55,13 @@ class SubscriptionDetectorAgent:
             'Utilities', 'Electricity', 'Gas', 'Water', 'Internet', 'Mobile', 'Phone', 'Cable',
             'Entertainment', 'Sports', 'Leisure', 'Miscellaneous', 'Other'
         ]
+        
+        # Hard exclusions - never treat these as subscriptions regardless of patterns
+        self.hard_exclusions = [
+            'mortgage', 'rent', 'loan', 'credit card', 'bank fee', 'atm', 'withdrawal', 'deposit',
+            'transfer', 'tax', 'insurance', 'salary', 'payroll', 'refund', 'cashback',
+            'tuition', 'school fee', 'utility', 'electricity', 'gas bill', 'water bill'
+        ]
 
         # Keywords that indicate a subscription service
         self.subscription_keywords = [
@@ -231,11 +238,16 @@ class SubscriptionDetectorAgent:
             desc_lower = description.lower()
             has_subscription_keyword = any(keyword in desc_lower for keyword in self.subscription_keywords)
 
-            # Filter 1: Skip categories typically not subscriptions (unless keyword match)
+            # Filter 1: Hard exclusions - never treat these as subscriptions
+            if any(exclusion in desc_lower for exclusion in self.hard_exclusions):
+                logger.debug(f"Skipping '{description}' - matches hard exclusion list")
+                continue
+
+            # Filter 2: Skip categories typically not subscriptions (unless keyword match)
             if category in self.excluded_categories and not has_subscription_keyword:
                 continue
 
-            # Filter 2: Skip restaurants/dining (even if they recur)
+            # Filter 3: Skip restaurants/dining (even if they recur)
             restaurant_keywords = ['restaurant', 'tavern', 'grill', 'cafe', 'coffee',
                                    'pizza', 'burger', 'bbq', 'diner', 'bistro', 'bar']
             if any(keyword in desc_lower for keyword in restaurant_keywords):

@@ -46,7 +46,7 @@ class MetricsCalculatorAgent:
             transactions: List of transaction dicts
             
         Returns:
-            Dict with all calculated metrics
+            Dict with all calculated metrics including per-account breakdowns
         """
         logger.info(f"Calculating metrics for {len(transactions)} transactions using pandas")
         
@@ -65,6 +65,13 @@ class MetricsCalculatorAgent:
             'trends': self._calculate_trends(df),
             'health': self._calculate_financial_health(df)
         }
+        
+        # Add per-account breakdowns if account_type exists
+        if 'account_type' in df.columns and df['account_type'].notna().any():
+            logger.info("Calculating per-account metrics")
+            metrics['by_account'] = self._calculate_per_account_metrics(df)
+        else:
+            metrics['by_account'] = {}
         
         # Convert numpy types to native Python types for serialization
         metrics = self._convert_numpy_types(metrics)
@@ -187,41 +194,107 @@ class MetricsCalculatorAgent:
         """
         Execute Python code to calculate financial health score.
         
-        Score factors:
-        - Income vs Expenses ratio (50%)
-        - Spending consistency (25%)
-        - Savings rate (25%)
+        Score factors (account-type aware):
+        - For checking/savings: Income vs Expenses ratio (50%)
+        - Credit card management: Payment ratio and balance (30%)
+        - Spending consistency (20%)
+        
+        This properly handles:
+        - Credit card overpayments (negative balance = good)
+        - Multiple account types with different conventions
         """
         logger.debug("Calculating financial health score")
         
-        total_income = df[df['amount'] > 0]['amount'].sum()
-        total_expenses = abs(df[df['amount'] < 0]['amount'].sum())
+        # Check if transactions have account type information for smarter analysis
+        has_accounts = 'account_type' in df.columns and df['account_type'].notna().any()
         
-        if total_income == 0:
-            return {
-                'health_score': 0,
-                'rating': 'Poor',
-                'factors': {
-                    'income_expense_ratio': 0,
-                    'savings_rate': 0,
-                    'spending_consistency': 0
+        if has_accounts:
+            # Calculate health based on account types
+            checking_df = df[df['account_type'].isin(['checking', 'current', 'savings'])]
+            cc_df = df[df['account_type'] == 'credit_card']
+            
+            # Checking/Savings health (60% weight)
+            checking_score = 0
+            if not checking_df.empty:
+                income = checking_df[checking_df['amount'] > 0]['amount'].sum()
+                expenses = abs(checking_df[checking_df['amount'] < 0]['amount'].sum())
+                
+                if income > 0:
+                    # Income vs Expense ratio (40 points)
+                    income_ratio = min((income / expenses) * 40, 40) if expenses > 0 else 40
+                    
+                    # Savings rate (20 points)
+                    net_savings = income - expenses
+                    savings_rate = (net_savings / income) * 20
+                    savings_rate = max(0, min(savings_rate, 20))
+                    
+                    checking_score = income_ratio + savings_rate
+            
+            # Credit Card health (40% weight)
+            cc_score = 0
+            if not cc_df.empty:
+                total_charges = cc_df[cc_df['amount'] > 0]['amount'].sum()
+                total_payments = abs(cc_df[cc_df['amount'] < 0]['amount'].sum())
+                net_balance = cc_df['amount'].sum()
+                
+                if total_charges > 0:
+                    # Payment coverage ratio (30 points)
+                    payment_ratio = min((total_payments / total_charges), 1.5) * 30  # Cap at 1.5 (overpayment is good)
+                    
+                    # Balance health (10 points)
+                    # Negative balance = overpayment = excellent
+                    # Low positive balance = good
+                    # High positive balance = poor
+                    if net_balance <= 0:
+                        balance_score = 10  # Overpaid = excellent
+                    elif net_balance < total_charges * 0.2:
+                        balance_score = 7  # Low balance = good
+                    elif net_balance < total_charges * 0.5:
+                        balance_score = 4  # Medium balance = fair
+                    else:
+                        balance_score = 0  # High unpaid balance = poor
+                    
+                    cc_score = payment_ratio + balance_score
+                elif total_payments > 0 and total_charges == 0:
+                    # Paying off existing debt with no new charges = excellent
+                    cc_score = 40
+            
+            # Combine scores
+            health_score = int(checking_score + cc_score)
+            
+            # Analyze spending consistency (informational only, not scored)
+            all_expenses = df[df['amount'] < 0]['amount'].abs()
+            consistency_note = ""
+            if len(all_expenses) > 1:
+                cv = all_expenses.std() / all_expenses.mean()  # Coefficient of variation
+                if cv < 0.5:
+                    consistency_note = "Very consistent spending"
+                elif cv < 1.0:
+                    consistency_note = "Moderately consistent spending"
+                else:
+                    consistency_note = "Variable spending patterns"
+        else:
+            # Legacy calculation for files without account types
+            total_income = df[df['amount'] > 0]['amount'].sum()
+            total_expenses = abs(df[df['amount'] < 0]['amount'].sum())
+            
+            if total_income == 0:
+                return {
+                    'health_score': 0,
+                    'rating': 'Poor',
+                    'factors': {},
+                    'net_savings': 0,
+                    'savings_percentage': 0
                 }
-            }
-        
-        # Factor 1: Income vs Expenses (50 points max)
-        income_expense_ratio = min((total_income / total_expenses) * 50, 50) if total_expenses > 0 else 50
-        
-        # Factor 2: Savings rate (25 points max)
-        net_savings = total_income - total_expenses
-        savings_rate = (net_savings / total_income) * 25 if total_income > 0 else 0
-        savings_rate = max(0, min(savings_rate, 25))  # Clamp between 0-25
-        
-        # Factor 3: Spending consistency (25 points max)
-        expenses = df[df['amount'] < 0]['amount'].abs()
-        consistency_score = 25 - min((expenses.std() / expenses.mean()) * 10, 25) if len(expenses) > 1 else 25
-        
-        # Total score
-        health_score = int(income_expense_ratio + savings_rate + consistency_score)
+            
+            # Simple income vs expense ratio
+            income_expense_ratio = min((total_income / total_expenses) * 50, 50) if total_expenses > 0 else 50
+            net_savings = total_income - total_expenses
+            savings_rate = (net_savings / total_income) * 50
+            savings_rate = max(0, min(savings_rate, 50))
+            
+            health_score = int(income_expense_ratio + savings_rate)
+            consistency_note = ""
         
         # Rating
         if health_score >= 80:
@@ -233,17 +306,85 @@ class MetricsCalculatorAgent:
         else:
             rating = 'Poor'
         
+        # Calculate overall net change
+        total_income = df[df['amount'] > 0]['amount'].sum()
+        total_expenses = abs(df[df['amount'] < 0]['amount'].sum())
+        net_savings = total_income - total_expenses
+        
         return {
             'health_score': health_score,
             'rating': rating,
             'factors': {
-                'income_expense_ratio': round(income_expense_ratio, 2),
-                'savings_rate': round(savings_rate, 2),
-                'spending_consistency': round(consistency_score, 2)
+                'account_aware': has_accounts,
+                'consistency': consistency_note
             },
             'net_savings': float(net_savings),
             'savings_percentage': round((net_savings / total_income) * 100, 2) if total_income > 0 else 0
         }
+    
+    def _calculate_per_account_metrics(self, df: pd.DataFrame) -> Dict:
+        """
+        Calculate metrics for each account type separately.
+        
+        Args:
+            df: DataFrame with transactions including account_type column
+            
+        Returns:
+            Dict with metrics for each account type
+        """
+        logger.debug("Calculating per-account metrics")
+        
+        account_metrics = {}
+        
+        # Get unique account types
+        account_types = df['account_type'].dropna().unique()
+        
+        for account_type in account_types:
+            if not account_type or account_type == 'unknown':
+                continue
+                
+            account_df = df[df['account_type'] == account_type]
+            logger.debug(f"Processing {len(account_df)} transactions for {account_type}")
+            
+            # Calculate basic metrics for this account
+            total_transactions = len(account_df)
+            total_inflows = float(account_df[account_df['amount'] > 0]['amount'].sum()) if len(account_df[account_df['amount'] > 0]) > 0 else 0.0
+            total_outflows = float(abs(account_df[account_df['amount'] < 0]['amount'].sum())) if len(account_df[account_df['amount'] < 0]) > 0 else 0.0
+            net_change = float(account_df['amount'].sum())
+            
+            # For credit cards, interpret differently
+            if account_type == 'credit_card':
+                # For credit cards:
+                # - Positive amounts = purchases/charges (debt increasing)
+                # - Negative amounts = payments (debt decreasing)
+                total_charges = total_inflows  # Purchases
+                total_payments = total_outflows  # Payments
+                current_balance = net_change  # Net debt
+                payment_ratio = (total_payments / total_charges * 100) if total_charges > 0 else 0.0
+                
+                account_metrics[account_type] = {
+                    'account_type': account_type,
+                    'total_transactions': total_transactions,
+                    'total_charges': total_charges,
+                    'total_payments': total_payments,
+                    'net_balance': current_balance,
+                    'payment_ratio': payment_ratio,
+                    'interpretation': 'Positive balance = outstanding debt'
+                }
+            else:
+                # For checking/savings:
+                # - Positive = deposits/income
+                # - Negative = withdrawals/expenses
+                account_metrics[account_type] = {
+                    'account_type': account_type,
+                    'total_transactions': total_transactions,
+                    'total_income': total_inflows,
+                    'total_expenses': total_outflows,
+                    'net_balance': net_change,
+                    'interpretation': 'Positive balance = money available'
+                }
+        
+        return account_metrics
     
     def _empty_metrics(self) -> Dict:
         """Return empty metrics structure when no transactions."""

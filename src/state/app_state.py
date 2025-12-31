@@ -14,6 +14,8 @@ class Transaction(TypedDict):
     description: str
     amount: float
     category: Optional[str]
+    account_type: Optional[str]  # checking, savings, credit_card, etc.
+    account_name: Optional[str]  # Original account name from statement
 
 
 class AppState(TypedDict):

@@ -120,6 +120,10 @@ class TransactionCategorizerAgent:
                     return category
         
         # Special logic: Check transaction type by amount
+        # Credit card payments should be Transfers, not Income
+        if 'credit card' in description or 'card payment' in description or 'cc payment' in description:
+            return "Transfers"
+        
         if amount > 0:
             if 'transfer from' in description or 'top-up' in description or 'deposit' in description:
                 return "Income"
@@ -164,13 +168,15 @@ Available categories:
 - Shopping: retail, online shopping, clothing
 - Health: pharmacy, gym, medical
 - Education: courses, books, tuition
-- Income: salary, payments received
-- Transfers: money transfers between accounts
+- Income: salary, payments received (NOT credit card payments or transfers between accounts)
+- Transfers: money transfers between accounts, credit card payments
 - Subscriptions: recurring monthly/annual services
 - Insurance: health, car, home insurance
 - Housing: rent, mortgage, maintenance
 - Savings: savings deposits, investments
 - Other: anything that doesn't fit above
+
+IMPORTANT: Credit card payments should be categorized as Transfers, NOT Income, even if they appear as positive amounts in checking accounts.
 
 Consider the transaction amount ({amount}) to help identify if it's income (positive) or expense (negative).
 
