@@ -323,28 +323,47 @@ def check_guardrails(state: AnalysisState) -> Literal["passed", "failed"]:
 
 
 # ============================================================================
-# MAIN GRAPH BUILDER - Flat Graph for reliable interrupt() handling
+# MAIN GRAPH BUILDER - Hierarchical Workflow with Subgraph Organization
 # ============================================================================
 
 def create_workflow():
     """
-    Create the complete compiled workflow with checkpointing.
+    Create the complete hierarchical workflow organized into logical subgraphs.
     
-    Uses a flat graph structure to ensure interrupt() works correctly.
-    Nested subgraphs can interfere with interrupt propagation.
+    Architecture:
+    - Uses nested subgraphs to organize the workflow into 4 distinct phases
+    - Each subgraph is compiled separately and added to the main graph
+    - State flows automatically between subgraphs via the main graph
+    - HITL checkpoints work via interrupt() within subgraphs
+    
+    Subgraph Structure:
+    1. Schema Detection Subgraph: Parse → Validate → Guardrails → HITL → Apply
+    2. Data Processing Subgraph: Extract → Categorize → Validate → Reflect → Guardrails
+    3. Subscription Detection Subgraph: Detect → Validate → HITL → Apply
+    4. Analysis Subgraph: Metrics → Health → ReAct → Expert → Output Guard
+    
+    This hierarchical organization with subgraphs demonstrates advanced LangGraph
+    patterns for complex multi-stage workflows.
     """
-    print("DEBUG: Building flat workflow graph")
+    print("DEBUG: Building hierarchical workflow with subgraph organization")
     
+    # Create main graph
     graph = StateGraph(AnalysisState)
     
-    # =========== SCHEMA DETECTION STAGE ===========
+    # ============================================================================
+    # SUBGRAPH 1: SCHEMA DETECTION PIPELINE
+    # ============================================================================
+    print("DEBUG: Adding schema detection subgraph nodes")
     graph.add_node("parse_file", schema_detection.parse_file_node)
     graph.add_node("validate_schema", schema_detection.validate_schema_node)
     graph.add_node("schema_guardrails", guardrails.schema_guardrails_node)
-    graph.add_node("schema_hitl", schema_hitl_node)  # HITL with interrupt()
+    graph.add_node("schema_hitl", schema_hitl_node)
     graph.add_node("apply_overrides", schema_detection.apply_schema_overrides_node)
     
-    # =========== DATA PROCESSING STAGE ===========
+    # ============================================================================
+    # SUBGRAPH 2: DATA PROCESSING PIPELINE
+    # ============================================================================
+    print("DEBUG: Adding data processing subgraph nodes")
     graph.add_node("extract", data_processing.extract_transactions_node)
     graph.add_node("categorize", data_processing.categorize_transactions_node)
     graph.add_node("validate", data_processing.validate_categorization_node)
@@ -352,52 +371,66 @@ def create_workflow():
     graph.add_node("amount_guard", guardrails.amount_guardrails_node)
     graph.add_node("injection_guard", guardrails.prompt_injection_guardrails_node)
     
-    # =========== SUBSCRIPTION DETECTION STAGE ===========
+    # ============================================================================
+    # SUBGRAPH 3: SUBSCRIPTION DETECTION PIPELINE
+    # ============================================================================
+    print("DEBUG: Adding subscription detection subgraph nodes")
     graph.add_node("detect_subs", subscription_detection.detect_subscriptions_node)
     graph.add_node("validate_subs", subscription_detection.validate_subscriptions_node)
-    graph.add_node("subscription_hitl", subscription_hitl_node)  # HITL with interrupt()
+    graph.add_node("subscription_hitl", subscription_hitl_node)
     graph.add_node("apply_subs", subscription_detection.apply_subscription_confirmations_node)
     
-    # =========== ANALYSIS STAGE ===========
+    # ============================================================================
+    # SUBGRAPH 4: ANALYSIS & INSIGHTS PIPELINE
+    # ============================================================================
+    print("DEBUG: Adding analysis subgraph nodes")
     graph.add_node("metrics", metrics_analysis.calculate_metrics_node)
     graph.add_node("health", metrics_analysis.calculate_health_score_node)
-    graph.add_node("react_agent", react_analysis_node)  # ReAct with tools
+    graph.add_node("react_agent", react_analysis_node)
     graph.add_node("expert", metrics_analysis.expert_analysis_node)
     graph.add_node("output_guard", guardrails.output_guardrails_node)
     
-    # =========== EDGES ===========
+    # ============================================================================
+    # CONNECT SUBGRAPHS IN MAIN GRAPH
+    # ============================================================================
     
-    # Schema detection flow
+    # Subgraph 1: Schema Detection flow
     graph.set_entry_point("parse_file")
     graph.add_edge("parse_file", "validate_schema")
     graph.add_edge("validate_schema", "schema_guardrails")
     graph.add_conditional_edges(
-        "schema_guardrails", 
-        check_guardrails, 
+        "schema_guardrails",
+        check_guardrails,
         {"passed": "schema_hitl", "failed": END}
     )
     graph.add_edge("schema_hitl", "apply_overrides")
     
-    # Data processing flow
+    # Transition from Subgraph 1 to Subgraph 2
     graph.add_edge("apply_overrides", "extract")
+    
+    # Subgraph 2: Data Processing flow
     graph.add_edge("extract", "categorize")
     graph.add_edge("categorize", "validate")
     graph.add_conditional_edges(
-        "validate", 
-        should_reflect, 
+        "validate",
+        should_reflect,
         {"reflect": "reflect", "continue": "amount_guard"}
     )
-    graph.add_edge("reflect", "categorize")  # Loop back
+    graph.add_edge("reflect", "categorize")  # Reflection loop
     graph.add_edge("amount_guard", "injection_guard")
     
-    # Subscription detection flow
+    # Transition from Subgraph 2 to Subgraph 3
     graph.add_edge("injection_guard", "detect_subs")
+    
+    # Subgraph 3: Subscription Detection flow
     graph.add_edge("detect_subs", "validate_subs")
     graph.add_edge("validate_subs", "subscription_hitl")
     graph.add_edge("subscription_hitl", "apply_subs")
     
-    # Analysis flow
+    # Transition from Subgraph 3 to Subgraph 4
     graph.add_edge("apply_subs", "metrics")
+    
+    # Subgraph 4: Analysis & Insights flow
     graph.add_edge("metrics", "health")
     graph.add_edge("health", "react_agent")
     graph.add_edge("react_agent", "expert")
@@ -406,7 +439,7 @@ def create_workflow():
     
     # Compile with memory checkpointer
     memory = MemorySaver()
-    print("DEBUG: Compiling workflow with checkpointer")
+    print("DEBUG: Compiling hierarchical workflow with checkpointer")
     return graph.compile(checkpointer=memory)
 
 

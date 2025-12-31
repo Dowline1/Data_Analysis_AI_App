@@ -129,7 +129,7 @@ class AnalysisState(TypedDict):
     
     # Expert Analysis Stage
     expert_insights: Optional[ExpertInsights]
-    expert_report: Optional[str]
+    expert_report: Optional[Dict[str, Any]]  # Full expert analysis dict
     react_analysis: Optional[str]  # ReAct agent analysis results
     
     # Reflection & Validation

@@ -12,7 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
-from src.state.app_state import Transaction
+from src.graph.state import Transaction
 from src.utils.config import Config
 from src.utils.logger import setup_logger
 

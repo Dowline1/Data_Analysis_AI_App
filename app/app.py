@@ -91,6 +91,12 @@ def run_workflow(workflow, input_data: Any, config: Dict) -> Dict:
         print(f"DEBUG: Graph state next: {graph_state.next}")
         print(f"DEBUG: Graph state tasks: {graph_state.tasks}")
         
+        # Log final state keys
+        if result["state"]:
+            print(f"DEBUG: Final state keys: {result['state'].keys()}")
+            print(f"DEBUG: Final state expert_report: {result['state'].get('expert_report')}")
+            print(f"DEBUG: Final state react_analysis: {result['state'].get('react_analysis')}")
+        
         # Check for interrupt in the state
         if graph_state.next:
             result["interrupted"] = True
@@ -634,6 +640,11 @@ def render_analysis_results():
     expert_report = state.get("expert_report")
     react_analysis = state.get("react_analysis")
     expert_insights = state.get("expert_insights")
+    
+    # Debug logging
+    print(f"DEBUG: render - expert_report type: {type(expert_report)}, value: {expert_report}")
+    print(f"DEBUG: render - expert_insights type: {type(expert_insights)}")
+    print(f"DEBUG: render - react_analysis type: {type(react_analysis)}")
     
     # Convert transactions to dict format if needed
     tx_list = [dict(tx) if hasattr(tx, 'items') else tx for tx in transactions]

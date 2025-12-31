@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.utils.config import Config
 from src.utils.logger import setup_logger
-from src.state.app_state import Transaction
+from src.graph.state import Transaction
 
 logger = setup_logger(__name__)
 
