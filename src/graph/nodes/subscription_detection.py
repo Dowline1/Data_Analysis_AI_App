@@ -20,10 +20,16 @@ def detect_subscriptions_node(state: AnalysisState) -> Dict[str, Any]:
     try:
         transactions = state.get("transactions", [])
         
+        print(f"DEBUG: detect_subscriptions_node - received {len(transactions)} transactions")
+        
         if not transactions:
+            print("DEBUG: No transactions available")
             return {
                 "errors": ["No transactions available for subscription detection"]
             }
+        
+        # Show sample transactions for debugging
+        print(f"DEBUG: Sample transactions: {transactions[:3]}")
         
         # Convert to format expected by detector
         tx_list = [
@@ -36,21 +42,40 @@ def detect_subscriptions_node(state: AnalysisState) -> Dict[str, Any]:
             for tx in transactions
         ]
         
-        detector = SubscriptionDetectorAgent()
+        print(f"DEBUG: Converted {len(tx_list)} transactions for detector")
+        
+        # Use same parameters as original app.py for consistent results
+        detector = SubscriptionDetectorAgent(min_occurrences=2, max_day_variance=5)
         results = detector.detect_subscriptions(tx_list)
         
+        print(f"DEBUG: Detector returned {len(results.get('subscriptions', []))} subscriptions")
+        if results.get('subscriptions'):
+            print(f"DEBUG: First subscription keys: {results['subscriptions'][0].keys()}")
+            print(f"DEBUG: First subscription: {results['subscriptions'][0]}")
+        
         # Convert to Subscription TypedDict
+        # Note: detector returns 'description' not 'merchant', and uses 'first_seen'/'last_seen'
+        # Filter out Daily/Weekly frequencies - these are not real subscriptions
+        valid_frequencies = ["Monthly", "Quarterly", "Semi-annual", "Annual", "Bi-weekly"]
         subscriptions = []
         for sub in results.get("subscriptions", []):
+            frequency = sub.get("frequency", "Unknown")
+            # Skip Daily and Weekly - these are regular purchases, not subscriptions
+            if frequency in ["Daily", "Weekly", "Weekly (approx)"]:
+                print(f"DEBUG: Skipping {sub.get('description')} - frequency {frequency} is not a subscription")
+                continue
+                
             subscriptions.append(Subscription(
-                merchant=sub["merchant"],
-                frequency=sub["frequency"],
-                amount=sub["amount"],
-                category=sub["category"],
-                transaction_dates=sub["transaction_dates"],
+                merchant=sub.get("description", sub.get("merchant", "Unknown")),  # Map description to merchant
+                frequency=frequency,
+                amount=abs(sub.get("amount", 0)),  # Ensure positive amount
+                category=sub.get("category", "Subscription"),
+                transaction_dates=[sub.get("first_seen", ""), sub.get("last_seen", "")],  # Use first/last seen
                 confirmed=False,  # Awaiting user confirmation
                 note=None
             ))
+        
+        print(f"DEBUG: Returning {len(subscriptions)} subscriptions to state (after filtering)")
         
         return {
             "detected_subscriptions": subscriptions,
@@ -60,6 +85,9 @@ def detect_subscriptions_node(state: AnalysisState) -> Dict[str, Any]:
         }
         
     except Exception as e:
+        import traceback
+        print(f"DEBUG: Subscription detection error: {e}")
+        print(traceback.format_exc())
         return {
             "errors": [f"Subscription detection failed: {str(e)}"]
         }

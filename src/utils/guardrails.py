@@ -188,36 +188,3 @@ class PIIMaskingGuardrail:
     def get_masking_summary(self) -> Dict[str, int]:
         """Get summary of what was masked."""
         return self.masked_count.copy()
-
-
-class GuardrailManager:
-    """
-    Manages all guardrails for the application.
-    Provides a single interface to apply all safety checks.
-    """
-    
-    def __init__(self, enable_pii_masking: bool = True):
-        self.file_validator = FileValidationGuardrail()
-        self.pii_masker = PIIMaskingGuardrail(enabled=enable_pii_masking)
-    
-    def validate_file(self, file_path: str) -> Tuple[bool, List[str]]:
-        """
-        Validate file before processing (Guardrail #1).
-        
-        Returns:
-            (is_valid, list_of_issues)
-        """
-        return self.file_validator.validate(file_path)
-    
-    def mask_pii(self, transactions: List[Dict]) -> List[Dict]:
-        """
-        Mask PII in transactions (Guardrail #2).
-        
-        Returns:
-            Transactions with PII masked
-        """
-        return self.pii_masker.mask_transactions(transactions)
-    
-    def get_pii_masking_summary(self) -> Dict[str, int]:
-        """Get summary of PII masking operations."""
-        return self.pii_masker.get_masking_summary()

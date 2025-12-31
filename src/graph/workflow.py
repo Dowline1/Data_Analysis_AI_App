@@ -1,13 +1,17 @@
 """
-Main LangGraph Workflow for Bank Statement Analysis
+LangGraph Workflow with Proper HITL using interrupt()
 
-This module constructs the complete StateGraph with subgraphs,
-reflection loops, guardrails, and HITL checkpoints.
+This module implements the bank statement analysis workflow using
+LangGraph with proper Human-in-the-Loop via the interrupt() function.
 """
 
-from typing import Literal
-from langgraph.graph import StateGraph, END
+from typing import Literal, Any, Dict, List
+from langgraph.graph import StateGraph, END, START
+from langgraph.types import Command, interrupt
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import BaseModel
 
 from src.graph.state import AnalysisState, create_initial_state
 from src.graph.nodes import schema_detection
@@ -17,242 +21,398 @@ from src.graph.nodes import metrics_analysis
 from src.graph.nodes import guardrails
 
 
-def should_await_user_input(state: AnalysisState) -> Literal["await_user", "continue"]:
-    """Conditional edge: Check if we need user input."""
-    return "await_user" if state.get("awaiting_user_input") else "continue"
+# ============================================================================
+# TOOLS for ReAct Agent
+# ============================================================================
 
+@tool
+def analyze_spending_patterns(transactions: List[Dict]) -> str:
+    """Analyze spending patterns from transaction data."""
+    if not transactions:
+        return "No transactions to analyze"
+    
+    categories = {}
+    for tx in transactions:
+        cat = tx.get("category", "Unknown")
+        amount = abs(tx.get("amount", 0))
+        categories[cat] = categories.get(cat, 0) + amount
+    
+    sorted_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)
+    result = "Top spending categories:\n"
+    for cat, amount in sorted_cats[:5]:
+        result += f"  - {cat}: ${amount:,.2f}\n"
+    return result
+
+
+@tool
+def calculate_monthly_average(transactions: List[Dict]) -> str:
+    """Calculate monthly average income and expenses."""
+    if not transactions:
+        return "No transactions to analyze"
+    
+    total_income = sum(tx.get("amount", 0) for tx in transactions if tx.get("amount", 0) > 0)
+    total_expenses = sum(abs(tx.get("amount", 0)) for tx in transactions if tx.get("amount", 0) < 0)
+    
+    # Estimate months from date range
+    months = max(1, len(set(tx.get("date", "")[:7] for tx in transactions)))
+    
+    return f"Monthly averages:\n  - Income: ${total_income/months:,.2f}\n  - Expenses: ${total_expenses/months:,.2f}"
+
+
+@tool
+def detect_anomalies(transactions: List[Dict], threshold: float = 3.0) -> str:
+    """Detect unusual transactions that deviate significantly from the mean."""
+    if not transactions:
+        return "No transactions to analyze"
+    
+    amounts = [abs(tx.get("amount", 0)) for tx in transactions]
+    if not amounts:
+        return "No amounts to analyze"
+    
+    mean = sum(amounts) / len(amounts)
+    variance = sum((x - mean) ** 2 for x in amounts) / len(amounts)
+    std = variance ** 0.5
+    
+    anomalies = []
+    for tx in transactions:
+        if abs(abs(tx.get("amount", 0)) - mean) > threshold * std:
+            anomalies.append(f"  - {tx.get('description', 'Unknown')}: ${tx.get('amount', 0):,.2f}")
+    
+    if anomalies:
+        return f"Anomalous transactions detected:\n" + "\n".join(anomalies[:10])
+    return "No anomalous transactions detected"
+
+
+# ============================================================================
+# HITL NODES using interrupt()
+# ============================================================================
+
+def schema_hitl_node(state: AnalysisState) -> Dict[str, Any]:
+    """
+    HITL checkpoint for schema confirmation.
+    Uses interrupt() to pause and wait for user confirmation.
+    """
+    print("DEBUG: Entering schema_hitl_node")
+    schema_info = state.get("schema_info")
+    
+    if not schema_info:
+        print("DEBUG: No schema_info found")
+        return {"errors": ["No schema info available for confirmation"]}
+    
+    # Create summary for user review
+    accounts = schema_info.get("accounts", [])
+    print(f"DEBUG: Found {len(accounts)} accounts")
+    
+    columns_detected = {
+        "date": schema_info.get("date_column"),
+        "description": schema_info.get("description_column"),
+        "amount": schema_info.get("amount_column"),
+        "account": schema_info.get("account_column")
+    }
+    print(f"DEBUG: Columns detected: {columns_detected}")
+    
+    print("DEBUG: Calling interrupt() - workflow will pause here")
+    # This will pause execution and wait for user input
+    user_response = interrupt({
+        "type": "schema_confirmation",
+        "message": "Please review the detected schema and accounts",
+        "schema_info": {
+            "columns": columns_detected,
+            "accounts": accounts,
+            "warnings": schema_info.get("warnings", []),
+            "recommendations": schema_info.get("recommendations", [])
+        }
+    })
+    
+    print(f"DEBUG: Resumed from interrupt with: {user_response}")
+    # When resumed, user_response contains the user's input
+    # Expected format: {"confirmed": True, "overrides": {...}}
+    if isinstance(user_response, dict):
+        return {
+            "schema_confirmed": user_response.get("confirmed", True),
+            "schema_overrides": user_response.get("overrides", {}),
+            "current_stage": "data_processing"
+        }
+    
+    return {
+        "schema_confirmed": True,
+        "current_stage": "data_processing"
+    }
+
+
+def subscription_hitl_node(state: AnalysisState) -> Dict[str, Any]:
+    """
+    HITL checkpoint for subscription confirmation.
+    Uses interrupt() to pause and wait for user confirmation.
+    """
+    subscriptions = state.get("detected_subscriptions", [])
+    
+    # Create summary for user review
+    sub_summary = []
+    for sub in subscriptions:
+        sub_summary.append({
+            "merchant": sub.get("merchant"),
+            "amount": sub.get("amount"),
+            "frequency": sub.get("frequency"),
+            "category": sub.get("category")
+        })
+    
+    # This will pause execution and wait for user input
+    user_response = interrupt({
+        "type": "subscription_confirmation",
+        "message": "Please review the detected subscriptions",
+        "subscriptions": sub_summary,
+        "total_count": len(subscriptions)
+    })
+    
+    # When resumed, user_response contains selections
+    # Expected format: {"selections": {merchant: bool}, "notes": {merchant: str}}
+    if isinstance(user_response, dict):
+        return {
+            "subscriptions_confirmed": True,
+            "subscription_selections": user_response.get("selections", {}),
+            "subscription_notes": user_response.get("notes", {}),
+            "current_stage": "analysis"
+        }
+    
+    return {
+        "subscriptions_confirmed": True,
+        "current_stage": "analysis"
+    }
+
+
+# ============================================================================
+# ReAct AGENT NODE
+# ============================================================================
+
+def react_analysis_node(state: AnalysisState) -> Dict[str, Any]:
+    """
+    ReAct agent node that uses tools to analyze transactions.
+    Implements the ReAct (Reasoning + Acting) pattern.
+    """
+    transactions = state.get("transactions", [])
+    
+    if not transactions:
+        return {"errors": ["No transactions available for analysis"]}
+    
+    # Create tool-equipped model
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+    tools = [analyze_spending_patterns, calculate_monthly_average, detect_anomalies]
+    llm_with_tools = llm.bind_tools(tools)
+    
+    # ReAct prompt
+    prompt = f"""You are a financial analyst. Analyze the following transaction data using the available tools.
+
+Transaction Summary:
+- Total transactions: {len(transactions)}
+- Date range: {transactions[0].get('date', 'N/A')} to {transactions[-1].get('date', 'N/A')} 
+
+Use the tools to:
+1. Analyze spending patterns
+2. Calculate monthly averages
+3. Detect any anomalies
+
+Provide a comprehensive analysis."""
+
+    # Execute ReAct loop
+    from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+    
+    messages = [HumanMessage(content=prompt)]
+    analysis_results = []
+    max_iterations = 5
+    
+    for i in range(max_iterations):
+        response = llm_with_tools.invoke(messages)
+        messages.append(response)
+        
+        if not response.tool_calls:
+            # No more tool calls, we're done
+            analysis_results.append(response.content)
+            break
+        
+        # Execute tool calls
+        for tool_call in response.tool_calls:
+            tool_name = tool_call["name"]
+            tool_args = tool_call["args"]
+            
+            # Add transactions to tool args
+            tool_args["transactions"] = transactions
+            
+            # Execute tool
+            if tool_name == "analyze_spending_patterns":
+                result = analyze_spending_patterns.invoke(tool_args)
+            elif tool_name == "calculate_monthly_average":
+                result = calculate_monthly_average.invoke(tool_args)
+            elif tool_name == "detect_anomalies":
+                result = detect_anomalies.invoke(tool_args)
+            else:
+                result = f"Unknown tool: {tool_name}"
+            
+            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+            analysis_results.append(f"Tool {tool_name}: {result}")
+    
+    return {
+        "react_analysis": "\n\n".join(analysis_results),
+        "reflection_notes": [f"ReAct agent completed {len(analysis_results)} analysis steps"]
+    }
+
+
+# ============================================================================
+# REFLECTION NODE
+# ============================================================================
+
+MAX_REFLECTION_ITERATIONS = 2
+
+def reflection_node(state: AnalysisState) -> Dict[str, Any]:
+    """
+    Reflection node that evaluates output quality and suggests improvements.
+    """
+    reflection_count = state.get("reflection_count", 0)
+    validation_errors = state.get("validation_errors", [])
+    
+    # Check if we should continue reflecting
+    if reflection_count >= MAX_REFLECTION_ITERATIONS:
+        return {
+            "needs_reflection": False,
+            "reflection_notes": [f"Max reflection iterations ({MAX_REFLECTION_ITERATIONS}) reached"]
+        }
+    
+    # Evaluate current state
+    issues = []
+    
+    # Check transaction categorization
+    transactions = state.get("transactions", [])
+    uncategorized = sum(1 for tx in transactions if not tx.get("category"))
+    if uncategorized > len(transactions) * 0.2:
+        issues.append(f"High uncategorized rate: {uncategorized}/{len(transactions)}")
+    
+    # Check for validation errors
+    if validation_errors:
+        issues.extend(validation_errors)
+    
+    if issues:
+        return {
+            "needs_reflection": True,
+            "reflection_count": reflection_count + 1,
+            "reflection_notes": issues
+        }
+    
+    return {
+        "needs_reflection": False,
+        "reflection_notes": ["Validation passed"]
+    }
+
+
+# ============================================================================
+# CONDITIONAL EDGES
+# ============================================================================
 
 def should_reflect(state: AnalysisState) -> Literal["reflect", "continue"]:
-    """Conditional edge: Check if reflection loop is needed."""
-    return "reflect" if state.get("needs_reflection") else "continue"
+    """Check if reflection is needed."""
+    if state.get("needs_reflection") and state.get("reflection_count", 0) < MAX_REFLECTION_ITERATIONS:
+        return "reflect"
+    return "continue"
 
 
-def check_guardrails(state: AnalysisState) -> Literal["failed", "passed"]:
-    """Conditional edge: Check if guardrails passed."""
-    return "passed" if state.get("guardrail_passed", True) else "failed"
+def check_guardrails(state: AnalysisState) -> Literal["passed", "failed"]:
+    """Check if guardrails passed."""
+    passed = state.get("guardrail_passed", True)
+    print(f"DEBUG: check_guardrails - passed={passed}")
+    return "passed" if passed else "failed"
 
 
-def build_schema_detection_subgraph() -> StateGraph:
-    """
-    Build the schema detection subgraph.
-    
-    Flow: parse_file → validate_schema → guardrails → [await_confirmation] → apply_overrides
-    """
-    subgraph = StateGraph(AnalysisState)
-    
-    # Add nodes
-    subgraph.add_node("parse_file", schema_detection.parse_file_node)
-    subgraph.add_node("validate_schema", schema_detection.validate_schema_node)
-    subgraph.add_node("schema_guardrails", guardrails.schema_guardrails_node)
-    subgraph.add_node("await_confirmation", schema_detection.await_schema_confirmation_node)
-    subgraph.add_node("apply_overrides", schema_detection.apply_schema_overrides_node)
-    
-    # Set entry point
-    subgraph.set_entry_point("parse_file")
-    
-    # Add edges
-    subgraph.add_edge("parse_file", "validate_schema")
-    subgraph.add_edge("validate_schema", "schema_guardrails")
-    
-    # Conditional: guardrails check
-    subgraph.add_conditional_edges(
-        "schema_guardrails",
-        check_guardrails,
-        {
-            "passed": "await_confirmation",
-            "failed": END
-        }
-    )
-    
-    # HITL checkpoint
-    subgraph.add_edge("await_confirmation", "apply_overrides")
-    subgraph.add_edge("apply_overrides", END)
-    
-    return subgraph
 
+# ============================================================================
+# MAIN GRAPH BUILDER - Flat Graph for reliable interrupt() handling
+# ============================================================================
 
-def build_data_processing_subgraph() -> StateGraph:
-    """
-    Build the data processing subgraph with reflection loop.
-    
-    Flow: extract → categorize → validate → [reflect if needed] → guardrails
-    """
-    subgraph = StateGraph(AnalysisState)
-    
-    # Add nodes
-    subgraph.add_node("extract_transactions", data_processing.extract_transactions_node)
-    subgraph.add_node("categorize", data_processing.categorize_transactions_node)
-    subgraph.add_node("validate_categorization", data_processing.validate_categorization_node)
-    subgraph.add_node("reflection_loop", data_processing.reflection_loop_node)
-    subgraph.add_node("amount_guardrails", guardrails.amount_guardrails_node)
-    subgraph.add_node("injection_guardrails", guardrails.prompt_injection_guardrails_node)
-    
-    # Set entry point
-    subgraph.set_entry_point("extract_transactions")
-    
-    # Add edges
-    subgraph.add_edge("extract_transactions", "categorize")
-    subgraph.add_edge("categorize", "validate_categorization")
-    
-    # Conditional: reflection loop
-    subgraph.add_conditional_edges(
-        "validate_categorization",
-        should_reflect,
-        {
-            "reflect": "reflection_loop",
-            "continue": "amount_guardrails"
-        }
-    )
-    
-    # Reflection loops back to categorize
-    subgraph.add_edge("reflection_loop", "categorize")
-    
-    # Guardrails sequence
-    subgraph.add_edge("amount_guardrails", "injection_guardrails")
-    
-    # Final guardrails check
-    subgraph.add_conditional_edges(
-        "injection_guardrails",
-        check_guardrails,
-        {
-            "passed": END,
-            "failed": END
-        }
-    )
-    
-    return subgraph
-
-
-def build_subscription_subgraph() -> StateGraph:
-    """
-    Build the subscription detection subgraph with HITL.
-    
-    Flow: detect → validate → [await_confirmation] → apply_confirmations
-    """
-    subgraph = StateGraph(AnalysisState)
-    
-    # Add nodes
-    subgraph.add_node("detect_subscriptions", subscription_detection.detect_subscriptions_node)
-    subgraph.add_node("validate_subscriptions", subscription_detection.validate_subscriptions_node)
-    subgraph.add_node("await_confirmation", subscription_detection.await_subscription_confirmation_node)
-    subgraph.add_node("apply_confirmations", subscription_detection.apply_subscription_confirmations_node)
-    
-    # Set entry point
-    subgraph.set_entry_point("detect_subscriptions")
-    
-    # Add edges
-    subgraph.add_edge("detect_subscriptions", "validate_subscriptions")
-    
-    # Conditional: reflection check (optional warnings)
-    subgraph.add_conditional_edges(
-        "validate_subscriptions",
-        should_reflect,
-        {
-            "reflect": "await_confirmation",  # Show warnings to user
-            "continue": "await_confirmation"  # Proceed to confirmation anyway
-        }
-    )
-    
-    # HITL checkpoint
-    subgraph.add_edge("await_confirmation", "apply_confirmations")
-    subgraph.add_edge("apply_confirmations", END)
-    
-    return subgraph
-
-
-def build_analysis_subgraph() -> StateGraph:
-    """
-    Build the metrics and expert analysis subgraph.
-    
-    Flow: calculate_metrics → health_score → expert_analysis → validate → guardrails
-    """
-    subgraph = StateGraph(AnalysisState)
-    
-    # Add nodes
-    subgraph.add_node("calculate_metrics", metrics_analysis.calculate_metrics_node)
-    subgraph.add_node("calculate_health", metrics_analysis.calculate_health_score_node)
-    subgraph.add_node("expert_analysis", metrics_analysis.expert_analysis_node)
-    subgraph.add_node("validate_analysis", metrics_analysis.validate_analysis_node)
-    subgraph.add_node("output_guardrails", guardrails.output_guardrails_node)
-    
-    # Set entry point
-    subgraph.set_entry_point("calculate_metrics")
-    
-    # Add edges
-    subgraph.add_edge("calculate_metrics", "calculate_health")
-    subgraph.add_edge("calculate_health", "expert_analysis")
-    subgraph.add_edge("expert_analysis", "validate_analysis")
-    
-    # Conditional: final validation
-    subgraph.add_conditional_edges(
-        "validate_analysis",
-        should_reflect,
-        {
-            "reflect": END,  # Exit with warnings
-            "continue": "output_guardrails"
-        }
-    )
-    
-    # Final guardrails
-    subgraph.add_edge("output_guardrails", END)
-    
-    return subgraph
-
-
-def build_main_graph() -> StateGraph:
-    """
-    Build the main LangGraph workflow.
-    
-    Orchestrates the four subgraphs with HITL checkpoints and error handling.
-    """
-    # Build subgraphs
-    schema_graph = build_schema_detection_subgraph()
-    processing_graph = build_data_processing_subgraph()
-    subscription_graph = build_subscription_subgraph()
-    analysis_graph = build_analysis_subgraph()
-    
-    # Create main graph
-    main_graph = StateGraph(AnalysisState)
-    
-    # Add subgraph nodes
-    main_graph.add_node("schema_detection", schema_graph.compile())
-    main_graph.add_node("data_processing", processing_graph.compile())
-    main_graph.add_node("subscription_detection", subscription_graph.compile())
-    main_graph.add_node("expert_review", analysis_graph.compile())
-    
-    # Set entry point
-    main_graph.set_entry_point("schema_detection")
-    
-    # Connect subgraphs sequentially
-    main_graph.add_edge("schema_detection", "data_processing")
-    main_graph.add_edge("data_processing", "subscription_detection")
-    main_graph.add_edge("subscription_detection", "expert_review")
-    main_graph.add_edge("expert_review", END)
-    
-    return main_graph
-
-
-def create_analysis_workflow():
+def create_workflow():
     """
     Create the complete compiled workflow with checkpointing.
     
-    Returns:
-        Compiled LangGraph application with memory saver for HITL.
+    Uses a flat graph structure to ensure interrupt() works correctly.
+    Nested subgraphs can interfere with interrupt propagation.
     """
-    graph = build_main_graph()
+    print("DEBUG: Building flat workflow graph")
     
-    # Add checkpointer for HITL support
+    graph = StateGraph(AnalysisState)
+    
+    # =========== SCHEMA DETECTION STAGE ===========
+    graph.add_node("parse_file", schema_detection.parse_file_node)
+    graph.add_node("validate_schema", schema_detection.validate_schema_node)
+    graph.add_node("schema_guardrails", guardrails.schema_guardrails_node)
+    graph.add_node("schema_hitl", schema_hitl_node)  # HITL with interrupt()
+    graph.add_node("apply_overrides", schema_detection.apply_schema_overrides_node)
+    
+    # =========== DATA PROCESSING STAGE ===========
+    graph.add_node("extract", data_processing.extract_transactions_node)
+    graph.add_node("categorize", data_processing.categorize_transactions_node)
+    graph.add_node("validate", data_processing.validate_categorization_node)
+    graph.add_node("reflect", reflection_node)
+    graph.add_node("amount_guard", guardrails.amount_guardrails_node)
+    graph.add_node("injection_guard", guardrails.prompt_injection_guardrails_node)
+    
+    # =========== SUBSCRIPTION DETECTION STAGE ===========
+    graph.add_node("detect_subs", subscription_detection.detect_subscriptions_node)
+    graph.add_node("validate_subs", subscription_detection.validate_subscriptions_node)
+    graph.add_node("subscription_hitl", subscription_hitl_node)  # HITL with interrupt()
+    graph.add_node("apply_subs", subscription_detection.apply_subscription_confirmations_node)
+    
+    # =========== ANALYSIS STAGE ===========
+    graph.add_node("metrics", metrics_analysis.calculate_metrics_node)
+    graph.add_node("health", metrics_analysis.calculate_health_score_node)
+    graph.add_node("react_agent", react_analysis_node)  # ReAct with tools
+    graph.add_node("expert", metrics_analysis.expert_analysis_node)
+    graph.add_node("output_guard", guardrails.output_guardrails_node)
+    
+    # =========== EDGES ===========
+    
+    # Schema detection flow
+    graph.set_entry_point("parse_file")
+    graph.add_edge("parse_file", "validate_schema")
+    graph.add_edge("validate_schema", "schema_guardrails")
+    graph.add_conditional_edges(
+        "schema_guardrails", 
+        check_guardrails, 
+        {"passed": "schema_hitl", "failed": END}
+    )
+    graph.add_edge("schema_hitl", "apply_overrides")
+    
+    # Data processing flow
+    graph.add_edge("apply_overrides", "extract")
+    graph.add_edge("extract", "categorize")
+    graph.add_edge("categorize", "validate")
+    graph.add_conditional_edges(
+        "validate", 
+        should_reflect, 
+        {"reflect": "reflect", "continue": "amount_guard"}
+    )
+    graph.add_edge("reflect", "categorize")  # Loop back
+    graph.add_edge("amount_guard", "injection_guard")
+    
+    # Subscription detection flow
+    graph.add_edge("injection_guard", "detect_subs")
+    graph.add_edge("detect_subs", "validate_subs")
+    graph.add_edge("validate_subs", "subscription_hitl")
+    graph.add_edge("subscription_hitl", "apply_subs")
+    
+    # Analysis flow
+    graph.add_edge("apply_subs", "metrics")
+    graph.add_edge("metrics", "health")
+    graph.add_edge("health", "react_agent")
+    graph.add_edge("react_agent", "expert")
+    graph.add_edge("expert", "output_guard")
+    graph.add_edge("output_guard", END)
+    
+    # Compile with memory checkpointer
     memory = MemorySaver()
-    
-    # Compile with checkpointing
-    app = graph.compile(checkpointer=memory)
-    
-    return app
+    print("DEBUG: Compiling workflow with checkpointer")
+    return graph.compile(checkpointer=memory)
 
 
-# Export for use in Streamlit app
+# Export
 __all__ = [
-    "create_analysis_workflow",
+    "create_workflow",
     "create_initial_state",
-    "AnalysisState"
+    "Command"
 ]

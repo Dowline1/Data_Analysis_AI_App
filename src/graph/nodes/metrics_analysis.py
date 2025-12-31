@@ -137,6 +137,8 @@ def expert_analysis_node(state: AnalysisState) -> Dict[str, Any]:
         subscriptions = state.get("detected_subscriptions", [])
         health_score = state.get("health_score")
         
+        print(f"DEBUG: expert_analysis_node - received {len(transactions)} transactions")
+        
         if not transactions:
             return {
                 "errors": ["No transactions available for expert analysis"]
@@ -144,35 +146,34 @@ def expert_analysis_node(state: AnalysisState) -> Dict[str, Any]:
         
         agent = ExpertInsightsAgent()
         
-        # Build context for expert
-        context = {
-            "transactions": transactions,
-            "account_metrics": account_metrics,
-            "subscriptions": subscriptions,
-            "health_score": health_score,
-            "date_range": state.get("date_range")
-        }
+        # Convert transactions to list of dicts for the agent
+        tx_list = [dict(tx) for tx in transactions]
         
-        result = agent.analyze_transactions(context)
+        print(f"DEBUG: expert_analysis_node - calling analyze_transactions with {len(tx_list)} transactions")
+        result = agent.analyze_transactions(tx_list)
+        print(f"DEBUG: expert_analysis_node - got result keys: {result.keys() if result else 'None'}")
         
         expert_insights = ExpertInsights(
-            spending_patterns=result.get("spending_patterns", ""),
-            income_analysis=result.get("income_analysis", ""),
-            credit_card_health=result.get("credit_card_health", ""),
-            subscription_impact=result.get("subscription_impact", ""),
-            recommendations=result.get("recommendations", []),
-            warnings=result.get("warnings", [])
+            spending_patterns=result.get("overall_summary", ""),
+            income_analysis="",
+            credit_card_health="; ".join(result.get("credit_card_findings", [])),
+            subscription_impact="; ".join(result.get("subscription_findings", [])),
+            recommendations=result.get("recommended_actions", []),
+            warnings=result.get("risk_alerts", [])
         )
         
         return {
             "expert_insights": expert_insights,
-            "expert_report": result.get("full_report"),
+            "expert_report": result,  # Pass the full dict
             "reflection_notes": [
                 "Expert analysis complete with personalized recommendations"
             ]
         }
         
     except Exception as e:
+        import traceback
+        print(f"DEBUG: expert_analysis_node - ERROR: {e}")
+        print(traceback.format_exc())
         return {
             "errors": [f"Expert analysis failed: {str(e)}"]
         }

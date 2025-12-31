@@ -113,7 +113,7 @@ class AnalysisState(TypedDict):
     schema_overrides: Optional[Dict[str, str]]  # account_name -> account_type
     
     # Data Processing Stage
-    transactions: Annotated[List[Transaction], add]
+    transactions: List[Transaction]  # No 'add' - we want to replace, not append
     raw_data: Optional[Dict[str, Any]]
     categorization_complete: bool
     
@@ -130,6 +130,7 @@ class AnalysisState(TypedDict):
     # Expert Analysis Stage
     expert_insights: Optional[ExpertInsights]
     expert_report: Optional[str]
+    react_analysis: Optional[str]  # ReAct agent analysis results
     
     # Reflection & Validation
     validation_errors: Annotated[List[str], add]
@@ -193,6 +194,7 @@ def create_initial_state(file_path: str) -> AnalysisState:
         # Expert Analysis
         expert_insights=None,
         expert_report=None,
+        react_analysis=None,
         
         # Reflection
         validation_errors=[],

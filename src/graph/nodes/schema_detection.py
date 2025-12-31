@@ -7,8 +7,10 @@ file parsing, column identification, account detection, and validation.
 
 from typing import Any, Dict
 from datetime import datetime
+from pathlib import Path
 from src.graph.state import AnalysisState, SchemaInfo, AccountInfo
 from src.agents.schema_preview_agent import SchemaPreviewAgent
+from src.tools.file_parser import FileParser
 
 
 def parse_file_node(state: AnalysisState) -> Dict[str, Any]:
@@ -18,25 +20,38 @@ def parse_file_node(state: AnalysisState) -> Dict[str, Any]:
     This is the entry point for the schema detection subgraph.
     """
     try:
+        file_path = state["file_path"]
+        
+        # Parse file using FileParser first
+        parsed = FileParser.parse_file(file_path)
+        df = parsed['dataframe']
+        file_type = parsed['file_type']
+        filename = Path(file_path).name
+        
+        # Generate schema preview
         agent = SchemaPreviewAgent()
-        preview_result = agent.generate_preview(state["file_path"])
+        preview_result = agent.generate_preview(df, file_type, filename)
+        
+        # Map preview result to our schema structure
+        detected_cols = preview_result.get("detected_columns", {})
+        account_preview = preview_result.get("account_preview", [])
         
         # Extract schema information
         schema_info = SchemaInfo(
-            columns_found=preview_result.get("columns_found", []),
-            date_column=preview_result.get("date_column"),
-            description_column=preview_result.get("description_column"),
-            amount_column=preview_result.get("amount_column"),
-            account_column=preview_result.get("account_column"),
-            balance_column=preview_result.get("balance_column"),
+            columns_found=list(df.columns),
+            date_column=detected_cols.get("date_column"),
+            description_column=detected_cols.get("description_column"),
+            amount_column=detected_cols.get("amount_column"),
+            account_column=detected_cols.get("account_name_column"),
+            balance_column=detected_cols.get("balance_column"),
             accounts=[
                 AccountInfo(
                     account_name=acc["account_name"],
                     account_type=acc["account_type"],
                     transaction_count=acc["transaction_count"],
-                    sample_descriptions=acc["sample_descriptions"]
+                    sample_descriptions=acc.get("sample_transactions", [])
                 )
-                for acc in preview_result.get("accounts", [])
+                for acc in account_preview
             ],
             warnings=preview_result.get("warnings", []),
             recommendations=preview_result.get("recommendations", [])
@@ -44,13 +59,15 @@ def parse_file_node(state: AnalysisState) -> Dict[str, Any]:
         
         return {
             "schema_info": schema_info,
+            "raw_data": {"dataframe": df.to_dict(), "file_type": file_type, "columns": list(df.columns)},
             "current_stage": "schema_detection",
             "analysis_timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
+        import traceback
         return {
-            "errors": [f"Schema detection failed: {str(e)}"],
+            "errors": [f"Schema detection failed: {str(e)}\n{traceback.format_exc()}"],
             "current_stage": "schema_detection"
         }
 

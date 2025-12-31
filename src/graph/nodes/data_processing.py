@@ -6,6 +6,7 @@ and validating the processed data with reflection loops.
 """
 
 from typing import Any, Dict, List
+import pandas as pd
 from src.graph.state import AnalysisState, Transaction
 from src.agents.schema_mapper import SchemaMapperAgent
 from src.agents.transaction_categorizer import TransactionCategorizerAgent
@@ -21,53 +22,77 @@ def extract_transactions_node(state: AnalysisState) -> Dict[str, Any]:
     try:
         schema_info = state["schema_info"]
         file_path = state["file_path"]
+        raw_data = state.get("raw_data", {})
         
-        # Build column mapping from schema
-        column_mapping = {
-            "date": schema_info["date_column"],
-            "description": schema_info["description_column"],
-            "amount": schema_info["amount_column"],
-        }
+        print(f"DEBUG: extract_transactions_node - file_path: {file_path}")
+        print(f"DEBUG: extract_transactions_node - schema_info type: {type(schema_info)}")
+        print(f"DEBUG: extract_transactions_node - raw_data keys: {raw_data.keys() if raw_data else 'None'}")
         
-        if schema_info.get("account_column"):
-            column_mapping["account"] = schema_info["account_column"]
-        if schema_info.get("balance_column"):
-            column_mapping["balance"] = schema_info["balance_column"]
+        # Get DataFrame from raw_data (saved during parse_file_node)
+        df_dict = raw_data.get("dataframe") if raw_data else None
+        file_type = raw_data.get("file_type", "xlsx") if raw_data else "xlsx"
         
-        # Extract transactions
+        if df_dict:
+            df = pd.DataFrame.from_dict(df_dict)
+            print(f"DEBUG: extract_transactions_node - DataFrame reconstructed with {len(df)} rows")
+        else:
+            # Fallback: re-parse the file
+            from src.tools.file_parser import FileParser
+            parsed = FileParser.parse_file(file_path)
+            df = parsed['dataframe']
+            file_type = parsed['file_type']
+            print(f"DEBUG: extract_transactions_node - Re-parsed file with {len(df)} rows")
+        
+        # Use SchemaMapperAgent to extract transactions
         mapper = SchemaMapperAgent()
-        result = mapper.extract_transactions(
-            file_path=file_path,
-            column_mapping=column_mapping
-        )
+        extracted_transactions = mapper.extract_from_dataframe(df, file_type, file_path)
+        
+        print(f"DEBUG: extract_transactions_node - extracted {len(extracted_transactions)} raw transactions")
+        
+        # Helper to convert date to string
+        def date_to_string(date_val):
+            if date_val is None:
+                return ""
+            if isinstance(date_val, str):
+                return date_val
+            if hasattr(date_val, 'strftime'):  # datetime or Timestamp
+                return date_val.strftime('%Y-%m-%d')
+            return str(date_val)
         
         # Convert to Transaction TypedDict
         transactions = []
-        for tx in result.get("transactions", []):
+        for tx in extracted_transactions:
             transactions.append(Transaction(
-                date=tx["date"],
-                description=tx["description"],
-                amount=tx["amount"],
-                account_type=tx["account_type"],
-                category=None,  # Will be set by categorization
+                date=date_to_string(tx.get("date", "")),
+                description=str(tx.get("description", "")),
+                amount=float(tx.get("amount", 0.0)),
+                account_type=str(tx.get("account_type", "unknown")),
+                category=tx.get("category"),  # May be set by mapper or None
                 transaction_type=tx.get("transaction_type"),
                 balance=tx.get("balance")
             ))
         
         date_range = None
         if transactions:
-            dates = [tx["date"] for tx in transactions]
-            date_range = (min(dates), max(dates))
+            dates = [tx["date"] for tx in transactions if tx.get("date")]
+            if dates:
+                date_range = (min(dates), max(dates))
+        
+        print(f"DEBUG: extract_transactions_node - returning {len(transactions)} transactions")
         
         return {
             "transactions": transactions,
             "total_transactions": len(transactions),
             "date_range": date_range,
-            "raw_data": result,
-            "reflection_notes": [f"Extracted {len(transactions)} transactions"]
+            "reflection_notes": [f"Extracted {len(transactions)} transactions"],
+            "reflection_count": 0,
+            "validation_errors": []
         }
         
     except Exception as e:
+        import traceback
+        print(f"DEBUG: extract_transactions_node - ERROR: {str(e)}")
+        print(f"DEBUG: {traceback.format_exc()}")
         return {
             "errors": [f"Transaction extraction failed: {str(e)}"]
         }
@@ -83,24 +108,36 @@ def categorize_transactions_node(state: AnalysisState) -> Dict[str, Any]:
     try:
         transactions = state.get("transactions", [])
         
+        print(f"DEBUG: categorize_transactions_node - received {len(transactions)} transactions")
+        
         if not transactions:
+            print("DEBUG: categorize_transactions_node - NO TRANSACTIONS!")
             return {
                 "errors": ["No transactions to categorize"]
             }
         
         categorizer = TransactionCategorizerAgent()
         
-        # Categorize each transaction
+        # Convert to dict format expected by categorizer
+        tx_dicts = [dict(tx) for tx in transactions]
+        
+        # Categorize all transactions at once
+        categorized_tx_dicts = categorizer.categorize_transactions(tx_dicts)
+        
+        # Convert back to Transaction TypedDict
         categorized_transactions = []
-        for tx in transactions:
-            category = categorizer.categorize(
+        for tx in categorized_tx_dicts:
+            categorized_transactions.append(Transaction(
+                date=tx["date"],
                 description=tx["description"],
                 amount=tx["amount"],
-                account_type=tx["account_type"]
-            )
-            
-            tx["category"] = category
-            categorized_transactions.append(tx)
+                account_type=tx["account_type"],
+                category=tx.get("category", "Other"),
+                transaction_type=tx.get("transaction_type"),
+                balance=tx.get("balance")
+            ))
+        
+        print(f"DEBUG: categorize_transactions_node - categorized {len(categorized_transactions)} transactions")
         
         return {
             "transactions": categorized_transactions,
@@ -111,6 +148,9 @@ def categorize_transactions_node(state: AnalysisState) -> Dict[str, Any]:
         }
         
     except Exception as e:
+        import traceback
+        print(f"DEBUG: categorize_transactions_node - ERROR: {e}")
+        print(traceback.format_exc())
         return {
             "errors": [f"Categorization failed: {str(e)}"]
         }

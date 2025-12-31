@@ -221,9 +221,21 @@ class ExpertInsightsAgent:
         Returns:
             Dictionary with credit card health metrics and overall assessment
         """
-        cc_transactions = [tx for tx in transactions if tx.get("account_type") == "credit_card"]
+        # Filter for credit card transactions - check for various credit card account type patterns
+        def is_credit_card_account(account_type: str) -> bool:
+            if not account_type:
+                return False
+            account_lower = account_type.lower()
+            # Match credit_card, or any type containing "card" (platinum_card, silver_card, gold_card, etc.)
+            # but exclude debit_card
+            return ("card" in account_lower and "debit" not in account_lower) or account_lower == "credit_card"
+        
+        cc_transactions = [tx for tx in transactions if is_credit_card_account(tx.get("account_type", ""))]
+        
+        logger.info(f"Filtered {len(cc_transactions)} credit card transactions from {len(transactions)} total")
         
         if not cc_transactions:
+            logger.warning("No credit card transactions found - returning has_credit_cards: False")
             return {"has_credit_cards": False}
         
         # Calculate by credit card account
@@ -240,11 +252,13 @@ class ExpertInsightsAgent:
             
             cc_accounts[account_name]["transaction_count"] += 1
             
-            if amount > 0:
-                cc_accounts[account_name]["total_charges"] += amount
+            # Credit card convention: negative = charges (money spent), positive = payments made
+            if amount < 0:
+                cc_accounts[account_name]["total_charges"] += abs(amount)
             else:
-                cc_accounts[account_name]["total_payments"] += abs(amount)
+                cc_accounts[account_name]["total_payments"] += amount
             
+            # Net balance: positive = overpayment (credit), negative = debt owed
             cc_accounts[account_name]["net_balance"] += amount
         
         # Analyze each account and calculate overall health
@@ -266,20 +280,23 @@ class ExpertInsightsAgent:
             elif stats["total_payments"] > 0:
                 payment_ratio = 2.0  # Only payments, no charges = excellent
             
+            # Net balance interpretation: POSITIVE = overpayment/credit (excellent), NEGATIVE = debt owed
             health_status = "EXCELLENT"
-            if stats["net_balance"] <= 0:
-                health_status = "EXCELLENT - Overpaid (credit balance of €{:.2f})".format(abs(stats["net_balance"]))
+            if stats["net_balance"] > 0:
+                health_status = "EXCELLENT - Overpaid (credit balance of €{:.2f})".format(stats["net_balance"])
+                excellent_count += 1
+            elif stats["net_balance"] == 0:
+                health_status = "EXCELLENT - Fully paid off"
                 excellent_count += 1
             elif payment_ratio >= 1.0:
-                health_status = "EXCELLENT - Paying off fully (payment ratio: {:.1f}x)".format(payment_ratio)
-                excellent_count += 1
-            elif payment_ratio >= 0.8:
-                health_status = "GOOD - Most charges covered"
+                health_status = "GOOD - Paying off charges (payment ratio: {:.1f}x)".format(payment_ratio)
                 good_count += 1
+            elif payment_ratio >= 0.8:
+                health_status = "FAIR - Most charges covered"
             elif payment_ratio >= 0.5:
                 health_status = "FAIR - Partial payment"
             else:
-                health_status = "POOR - Debt accumulating"
+                health_status = "CONCERN - Debt accumulating"
             
             total_net_balance += stats["net_balance"]
             total_payment_ratio += payment_ratio
@@ -296,10 +313,16 @@ class ExpertInsightsAgent:
         # Generate overall assessment
         avg_payment_ratio = total_payment_ratio / len(cc_accounts)
         
-        if total_net_balance <= 0:
+        # POSITIVE net balance = customer has credit (overpaid), NEGATIVE = owes money
+        if total_net_balance > 0:
             analysis["overall_assessment"] = (
-                f"EXCELLENT CREDIT CARD MANAGEMENT: All accounts show credit balances (total overpayment: €{abs(total_net_balance):.2f}). "
+                f"EXCELLENT CREDIT CARD MANAGEMENT: All accounts show credit balances (total overpayment: €{total_net_balance:.2f}). "
                 f"Customer is paying MORE than they charge, maintaining positive credit on cards. This is exemplary financial behavior."
+            )
+        elif total_net_balance == 0:
+            analysis["overall_assessment"] = (
+                f"EXCELLENT CREDIT CARD MANAGEMENT: All accounts are fully paid off with zero balance. "
+                f"Customer is maintaining perfect payment discipline."
             )
         elif excellent_count == len(cc_accounts):
             analysis["overall_assessment"] = (
@@ -322,7 +345,9 @@ class ExpertInsightsAgent:
             "total_accounts": len(cc_accounts),
             "combined_net_balance": round(total_net_balance, 2),
             "average_payment_ratio": round(avg_payment_ratio, 2),
-            "accounts_in_credit": sum(1 for stats in cc_accounts.values() if stats["net_balance"] <= 0),
+            "accounts_in_credit": sum(1 for stats in cc_accounts.values() if stats["net_balance"] > 0),
+            "accounts_fully_paid": sum(1 for stats in cc_accounts.values() if stats["net_balance"] == 0),
+            "accounts_with_debt": sum(1 for stats in cc_accounts.values() if stats["net_balance"] < 0),
             "excellent_accounts": excellent_count,
             "good_accounts": good_count
         }
