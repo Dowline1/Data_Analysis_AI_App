@@ -28,6 +28,9 @@ from src.graph.workflow import create_analysis_workflow, create_initial_state
 from src.graph.state import AnalysisState
 from src.agents.chat_with_data_agent import ChatWithDataAgent
 
+# Sample file path
+SAMPLE_FILE = ROOT_DIR / "data" / "sample_statements" / "sample_statement.xlsx"
+
 # Initialize workflow (cached)
 @st.cache_resource(show_spinner=False)
 def get_workflow():
@@ -385,22 +388,43 @@ def main():
     st.title("💰 Bank Statement Analyzer with LangGraph")
     st.caption("Powered by LangGraph, LangChain, and Google Gemini")
     
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Upload your bank statement (CSV or Excel)",
-        type=["csv", "xlsx", "xls"],
-        help="Upload a CSV or Excel file with your bank transactions"
-    )
+    # Sidebar for file input
+    with st.sidebar:
+        st.header("📁 Statement Input")
+        uploaded_file = st.file_uploader(
+            "Upload statement",
+            type=["csv", "xlsx", "xls"],
+            help="Upload a CSV or Excel file with your bank transactions"
+        )
+        
+        use_sample = st.button("📊 Use Sample Statement", use_container_width=True)
+        
+        st.divider()
+        st.caption("💡 Tip: The sample statement demonstrates multi-account analysis with credit card, checking, and current accounts.")
     
-    if uploaded_file:
+    # Determine which file to process
+    file_to_process = None
+    filename = None
+    
+    if use_sample:
+        if not SAMPLE_FILE.exists():
+            st.error(f"Sample file not found at {SAMPLE_FILE}")
+        else:
+            file_to_process = SAMPLE_FILE.read_bytes()
+            filename = SAMPLE_FILE.name
+            st.info("📊 Using sample statement for demonstration")
+    elif uploaded_file:
+        file_to_process = uploaded_file.read()
+        filename = uploaded_file.name
+    
+    if file_to_process:
         # Save file content
-        file_bytes = uploaded_file.read()
-        st.session_state.uploaded_file_content = file_bytes
+        st.session_state.uploaded_file_content = file_to_process
         
         # Create temporary file
-        suffix = Path(uploaded_file.name).suffix
+        suffix = Path(filename).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(file_bytes)
+            tmp.write(file_to_process)
             tmp_path = tmp.name
         
         try:
