@@ -698,19 +698,4 @@ This creates `docs/workflow_diagram.png` showing the complete graph structure.
 4. Tavily Search API: https://tavily.com/
 5. ExchangeRate-API: https://www.exchangerate-api.com/
 
----
-
-## License
-
-This project is submitted as coursework for academic evaluation.
-
----
-
-## Author
-
-Eoin Dowling  
-Student Number: D00295535  
-Module: Foundations of Agentic AI Systems  
-Date: January 2026
-
 *More documentation will be added as development progresses.*
