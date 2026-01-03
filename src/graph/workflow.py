@@ -20,11 +20,16 @@ from src.graph.nodes import subscription_detection
 from src.graph.nodes import metrics_analysis
 from src.graph.nodes import guardrails
 
+# Import external tools
+from src.tools.currency_converter import convert_currency_tool
+from src.tools.stock_recommendations import recommend_growth_stocks_tool
+
 
 # ============================================================================
 # TOOLS for ReAct Agent
 # ============================================================================
 
+# Local Analysis Tools
 @tool
 def analyze_spending_patterns(transactions: List[Dict]) -> str:
     """Analyze spending patterns from transaction data."""
@@ -81,6 +86,40 @@ def detect_anomalies(transactions: List[Dict], threshold: float = 3.0) -> str:
     if anomalies:
         return f"Anomalous transactions detected:\n" + "\n".join(anomalies[:10])
     return "No anomalous transactions detected"
+
+
+# External API Tools
+@tool
+def convert_currency(amount: float, from_currency: str, to_currency: str) -> str:
+    """
+    Convert currency using real-time exchange rates from external API.
+    
+    Args:
+        amount: Amount to convert
+        from_currency: Source currency code (e.g., 'EUR', 'USD', 'GBP')
+        to_currency: Target currency code
+        
+    Returns:
+        Formatted conversion result
+    """
+    return convert_currency_tool(amount, from_currency, to_currency)
+
+
+@tool
+def recommend_growth_stocks(market: str = "US") -> str:
+    """
+    Search for growth stock recommendations using external web search API.
+    
+    Uses Tavily Search API to find current market analysis and expert insights
+    on top growth stocks with detailed justifications.
+    
+    Args:
+        market: Target market for recommendations (e.g., 'US', 'Europe', 'Global')
+        
+    Returns:
+        Formatted recommendations with analysis from web search results
+    """
+    return recommend_growth_stocks_tool(market)
 
 
 # ============================================================================
@@ -188,30 +227,52 @@ def subscription_hitl_node(state: AnalysisState) -> Dict[str, Any]:
 def react_analysis_node(state: AnalysisState) -> Dict[str, Any]:
     """
     ReAct agent node that uses tools to analyze transactions.
-    Implements the ReAct (Reasoning + Acting) pattern.
+    Implements the ReAct (Reasoning + Acting) pattern with both local and external API tools.
+    
+    Tools available:
+    - Local analysis tools: spending patterns, monthly averages, anomaly detection
+    - External API tools: currency conversion, bank product recommendations
     """
     transactions = state.get("transactions", [])
+    account_metrics = state.get("account_metrics", [])
     
     if not transactions:
         return {"errors": ["No transactions available for analysis"]}
     
-    # Create tool-equipped model
+    # Create tool-equipped model with both local and external tools
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
-    tools = [analyze_spending_patterns, calculate_monthly_average, detect_anomalies]
+    tools = [
+        # Local analysis tools
+        analyze_spending_patterns, 
+        calculate_monthly_average, 
+        detect_anomalies,
+        # External API tools
+        convert_currency,
+        recommend_growth_stocks
+    ]
     llm_with_tools = llm.bind_tools(tools)
     
-    # ReAct prompt
+    # Calculate net cash flow for recommendations
+    net_flow = 0
+    if account_metrics:
+        for metric in account_metrics:
+            net_flow += metric.get("net_cash_flow", 0)
+    
+    # ReAct prompt with guidance to use external tools
     prompt = f"""You are a financial analyst. Analyze the following transaction data using the available tools.
 
 Transaction Summary:
 - Total transactions: {len(transactions)}
-- Date range: {transactions[0].get('date', 'N/A')} to {transactions[-1].get('date', 'N/A')} 
+- Date range: {transactions[0].get('date', 'N/A')} to {transactions[-1].get('date', 'N/A')}
+- Net monthly cash flow: ${net_flow:.2f}
 
 Use the tools to:
 1. Analyze spending patterns
 2. Calculate monthly averages
 3. Detect any anomalies
+4. If net flow is positive, recommend growth stocks for investment using recommend_growth_stocks tool
 
+You have access to external APIs for currency conversion and stock market recommendations.
 Provide a comprehensive analysis."""
 
     # Execute ReAct loop
@@ -235,8 +296,9 @@ Provide a comprehensive analysis."""
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             
-            # Add transactions to tool args
-            tool_args["transactions"] = transactions
+            # Add transactions to tool args for analysis tools
+            if tool_name in ["analyze_spending_patterns", "calculate_monthly_average", "detect_anomalies"]:
+                tool_args["transactions"] = transactions
             
             # Execute tool
             if tool_name == "analyze_spending_patterns":

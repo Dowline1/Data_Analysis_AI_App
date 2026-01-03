@@ -573,6 +573,54 @@ def _render_subscriptions(subscriptions: List[Dict]):
         })
     
     sub_df = pd.DataFrame(sub_data)
+
+
+def _render_stock_recommendations(account_metrics: List[Dict]):
+    """Render growth stock recommendations using external Tavily API."""
+    st.subheader("📈 Investment Opportunities")
+    st.caption("Powered by real-time market analysis")
+    
+    if not account_metrics:
+        return
+    
+    # Calculate total net flow
+    total_net_flow = sum(m.get("net_cash_flow", 0) for m in account_metrics)
+    
+    if total_net_flow <= 0:
+        st.info("💡 Focus on building positive cash flow before investing.")
+        return
+    
+    st.success(f"✅ Great! You have a positive monthly cash flow of €{total_net_flow:.2f}")
+    
+    # Market selector and recommendation trigger
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        market = st.selectbox(
+            "Select market for stock recommendations",
+            ["US", "Europe", "Global", "Asia"],
+            key="market_selector"
+        )
+    
+    with col2:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        search_button = st.button("📈 Get Stock Recommendations", type="primary")
+    
+    if search_button:
+        with st.spinner(f"Analyzing {market} market growth stocks..."):
+            from src.tools.stock_recommendations import StockRecommender
+            
+            recommender = StockRecommender()
+            recommendations = recommender.get_growth_stocks(
+                market=market
+            )
+            
+            st.markdown(recommendations)
+            
+            # Add disclaimer
+            st.warning("⚠️ These are informational recommendations from market analysis. Not financial advice. Consult a professional before investing.")
+
     st.dataframe(sub_df, use_container_width=True)
 
 
@@ -650,8 +698,38 @@ def render_analysis_results():
     tx_list = [dict(tx) if hasattr(tx, 'items') else tx for tx in transactions]
     sub_list = [dict(s) if hasattr(s, 'items') else s for s in subscriptions]
     
-    # Summary metrics at top
-    st.success(f"✅ Analysis complete for {st.session_state.filename}")
+    # Summary metrics at top with currency selector
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.success(f"✅ Analysis complete for {st.session_state.filename}")
+    
+    with col2:
+        # Currency converter dropdown
+        from src.tools.currency_converter import CurrencyConverter
+        converter = CurrencyConverter()
+        
+        currency_options = [code for code, name in converter.SUPPORTED_CURRENCIES]
+        currency_labels = [f"{code} - {name}" for code, name in converter.SUPPORTED_CURRENCIES]
+        
+        selected_currency = st.selectbox(
+            "💱 Display Currency",
+            options=currency_options,
+            format_func=lambda x: next((label for code, label in zip(currency_options, currency_labels) if code == x), x),
+            index=0,  # Default to EUR
+            key="display_currency"
+        )
+    
+    # Apply currency conversion if needed
+    if selected_currency != "EUR":
+        for tx in tx_list:
+            if "original_amount" not in tx:
+                tx["original_amount"] = tx["amount"]
+                tx["original_currency"] = "EUR"
+            
+            converted = converter.convert_amount(tx["original_amount"], "EUR", selected_currency)
+            if converted is not None:
+                tx["amount"] = converted
     
     info_cols = st.columns(3)
     confirmed_subs = [s for s in sub_list if s.get("confirmed")]
@@ -669,7 +747,15 @@ def render_analysis_results():
             monthly_cost += amount / 12
         elif 'quarter' in freq:
             monthly_cost += amount / 3
-    info_cols[2].metric("Est. Monthly Subscription Cost", f"${monthly_cost:.2f}")
+    
+    # Convert subscription cost
+    if selected_currency != "EUR":
+        monthly_cost_converted = converter.convert_amount(monthly_cost, "EUR", selected_currency)
+        if monthly_cost_converted is not None:
+            monthly_cost = monthly_cost_converted
+    
+    currency_symbol = next((name.split("(")[1].split(")")[0] for code, name in converter.SUPPORTED_CURRENCIES if code == selected_currency), selected_currency)
+    info_cols[2].metric("Est. Monthly Subscription Cost", f"{currency_symbol}{monthly_cost:.2f}")
     
     # Render all sections
     _render_metrics_dashboard(tx_list)
@@ -677,9 +763,14 @@ def render_analysis_results():
     _render_category_overview(tx_list)
     _render_visualizations(tx_list)
     _render_subscriptions(sub_list)
+    
+    # Stock recommendations (external API tool)
+    account_metrics = state.get("account_metrics", [])
+    _render_stock_recommendations(account_metrics)
+    
     _render_expert_report(expert_report)
     
-    # ReAct Analysis
+    # ReAct Analysis with bank recommendations
     if react_analysis:
         st.subheader("🤖 AI Agent Analysis (ReAct)")
         st.markdown(react_analysis)
@@ -696,7 +787,109 @@ def main():
     initialize_session_state()
     
     st.title("💰 Bank Statement Analyzer")
-    st.caption("Powered by LangGraph with Human-in-the-Loop")
+    st.caption("Powered by LangGraph with Human-in-the-Loop + External API Tools")
+    
+    # ============================================================================
+    # EXTERNAL TOOLS SECTION - Usable WITHOUT running analysis
+    # ============================================================================
+    
+    st.markdown("---")
+    st.subheader("🔧 External API Tools")
+    st.caption("These tools work independently and demonstrate external API integration")
+    
+    tool_col1, tool_col2 = st.columns(2)
+    
+    # Currency Converter Tool
+    with tool_col1:
+        st.markdown("### 💱 Currency Converter")
+        st.caption("Real-time exchange rates from ExchangeRate-API")
+        
+        from src.tools.currency_converter import CurrencyConverter
+        converter = CurrencyConverter()
+        
+        currency_options = [code for code, name in converter.SUPPORTED_CURRENCIES]
+        currency_names = dict(converter.SUPPORTED_CURRENCIES)
+        
+        # Two-way converter
+        left_col, right_col = st.columns(2)
+        
+        with left_col:
+            from_currency = st.selectbox(
+                "From Currency",
+                options=currency_options,
+                format_func=lambda x: f"{x} - {currency_names[x]}",
+                index=0,
+                key="conv_from"
+            )
+            from_amount = st.number_input(
+                "Amount",
+                min_value=0.0,
+                value=100.0,
+                step=10.0,
+                key="conv_from_amount"
+            )
+        
+        with right_col:
+            to_currency = st.selectbox(
+                "To Currency",
+                options=currency_options,
+                format_func=lambda x: f"{x} - {currency_names[x]}",
+                index=1,  # USD
+                key="conv_to"
+            )
+            
+            # Calculate conversion - this will update automatically when inputs change
+            to_amount = 0.0
+            if from_amount > 0:
+                converted = converter.convert_amount(from_amount, from_currency, to_currency)
+                if converted is not None:
+                    to_amount = converted
+                    st.metric("Converted Amount", f"{to_amount:.2f} {to_currency}")
+                    rate = converted / from_amount
+                    st.caption(f"📊 Exchange Rate: 1 {from_currency} = {rate:.4f} {to_currency}")
+                else:
+                    st.error("⚠️ Conversion failed. API may be unavailable.")
+            else:
+                st.metric("Converted Amount", f"0.00 {to_currency}")
+        
+        # Refresh button to clear cache and get latest rates
+        if st.button("🔄 Refresh Exchange Rates", use_container_width=True, key="refresh_rates"):
+            converter.cache.clear()
+            st.success("✅ Exchange rate cache cleared! Rates will be fetched fresh.")
+            st.rerun()
+    
+    # Stock Market Recommendations Tool
+    with tool_col2:
+        st.markdown("### 📈 Growth Stock Finder")
+        st.caption("Market analysis powered by Tavily API")
+        
+        stock_market = st.selectbox(
+            "Select Market",
+            ["US", "Europe", "Global", "Asia", "Emerging Markets"],
+            key="stock_market"
+        )
+        
+        stock_sector = st.selectbox(
+            "Focus Sector (Optional)",
+            ["All Sectors", "Technology", "Healthcare", "Finance", "Energy", "Consumer"],
+            key="stock_sector"
+        )
+        
+        if st.button("📊 Get Stock Recommendations", type="primary", use_container_width=True):
+            with st.spinner(f"Analyzing {stock_market} market growth stocks..."):
+                from src.tools.stock_recommendations import StockRecommender
+                
+                recommender = StockRecommender()
+                sector = None if stock_sector == "All Sectors" else stock_sector
+                results = recommender.get_growth_stocks(
+                    market=stock_market,
+                    sector=sector
+                )
+                
+                st.markdown(results)
+                st.info("💡 Recommendations based on current market analysis. Not financial advice.")
+    
+    st.markdown("---")
     
     # Sidebar
     with st.sidebar:
