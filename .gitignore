@@ -51,12 +51,13 @@ IMPLEMENTATION_CHECKLIST.md
 NOTES.md
 TODO.md
 PROGRESS.md
+SCREENCAST_SCRIPT.md
 *_NOTES.md
 docs/*.md
 !docs/architecture_diagram.*
 
-# Test scripts and development files
-test_*.py
+# Test scripts and development files (exclude from repo)
+# But keep the tests/ directory for unit tests
 dev_*.py
 scratch_*.py
 experiments/

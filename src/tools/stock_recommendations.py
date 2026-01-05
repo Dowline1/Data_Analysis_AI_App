@@ -114,9 +114,6 @@ class StockRecommender:
                 # Only include if we found a ticker (skip sector overview articles)
                 if ticker:
                     valid_stocks.append(result)
-                    logger.info(f"Valid stock found with ticker: {ticker}")
-                else:
-                    logger.info(f"Skipping result without ticker: {title[:50]}")
                 
                 # Stop once we have 5 valid stocks
                 if len(valid_stocks) >= 5:
@@ -193,8 +190,6 @@ class StockRecommender:
                     # Last resort: use first meaningful part of title
                     clean_title = re.sub(r'[\[\(].*?[\]\)]', '', title).strip()
                     stock_name = clean_title[:60]
-                
-                logger.info(f"Extracted stock: {stock_name} from title: {title}")
                 
                 # Create focused summary emphasizing investment rationale
                 investment_keywords = ['growth', 'revenue', 'earnings', 'profit', 'margin', 'market', 

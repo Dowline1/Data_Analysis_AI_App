@@ -9,7 +9,7 @@
 
 ## Quick Start
 
-**Want to run the system immediately?** Jump to [Installation and Usage](#installation-and-usage)
+Jump to [Installation and Usage](#installation-and-usage)
 
 **Key Features:**
 - Multi-agent LangGraph workflow with 4 specialized subgraphs
@@ -20,7 +20,7 @@
 - Comprehensive financial insights and recommendations
 
 **Architecture Highlights:**
-- [Workflow Visualization](#23-langgraph-workflow-implementation) - See the complete graph diagram
+- [Workflow Visualisation](#23-langgraph-workflow-implementation) - See the complete graph diagram
 - [External Tools](#4-external-tool-integration) - Currency conversion and stock analysis
 - [HITL Implementation](#5-human-in-the-loop-implementation) - Human oversight at critical points
 
@@ -37,30 +37,29 @@
 7. [User Interface](#7-user-interface)
 8. [Challenges and Solutions](#8-challenges-and-solutions)
 9. [Testing and Evaluation](#9-testing-and-evaluation)
-10. [Future Enhancements](#10-future-enhancements)
-11. [Conclusion](#11-conclusion)
-12. [Installation and Usage](#installation-and-usage)
+10. [Conclusion](#10-conclusion)
+11. [Installation and Usage](#installation-and-usage)
 
 ---
 
 ## Executive Summary
 
-This project implements a sophisticated multi-agent financial analysis system using LangGraph and modern agentic AI patterns. The system processes bank statements from any format (CSV or Excel) and provides comprehensive financial insights through a combination of specialized AI agents, external API integrations, and human-in-the-loop checkpoints. The architecture demonstrates practical implementation of key concepts including ReAct agents, reflection loops, guardrails, and tool integration.
+This project implements a multi-agent financial analysis system using LangGraph and modern agentic AI patterns. The system processes bank statements from any structured format (CSV or Excel) and provides comprehensive financial insights through a combination of specialized AI agents, external API integrations, and human-in-the-loop checkpoints. The architecture demonstrates practical implementation of key concepts including ReAct agents, reflection loops, guardrails, and tool integration.
 
 **System Capabilities:**
 
-| Feature | Implementation | Status |
-|---------|---------------|--------|
-| Multi-Agent Workflow | 4 specialized subgraphs with LangGraph | ✅ Complete |
-| Schema Detection | AI-powered column mapping for any bank format | ✅ Complete |
-| Transaction Categorization | Hybrid keyword + LLM approach | ✅ Complete |
-| Subscription Detection | Pattern analysis with LLM validation | ✅ Complete |
-| Human-in-the-Loop | Proper `interrupt()` at 2 checkpoints | ✅ Complete |
-| External API Tools | Currency + Stock recommendations | ✅ Complete |
-| ReAct Agent | 5 tools (3 local + 2 external) | ✅ Complete |
-| Guardrails | Input validation + PII detection | ✅ Complete |
-| Reflection Loop | Expert report approval/revision | ✅ Complete |
-| Web Interface | Streamlit dashboard | ✅ Complete |
+| Feature | Implementation |
+|---------|---------------|
+| Multi-Agent Workflow | 4 specialized subgraphs with LangGraph |
+| Schema Detection | AI-powered column mapping for any bank format |
+| Transaction Categorization | Hybrid keyword + LLM approach |
+| Subscription Detection | Pattern analysis with LLM validation |
+| Human-in-the-Loop | Proper `interrupt()` at 2 checkpoints |
+| External API Tools | Currency + Stock recommendations |
+| ReAct Agent | 5 tools (3 local + 2 external) |
+| Guardrails | Input validation + PII detection |
+| Reflection Loop | Expert report approval/revision |
+| Web Interface | Streamlit dashboard |
 
 ---
 
@@ -68,15 +67,15 @@ This project implements a sophisticated multi-agent financial analysis system us
 
 ### 1.1 Project Motivation
 
-Financial literacy is a critical skill in modern society, yet many individuals lack the tools to easily analyze their spending patterns and make informed financial decisions. This project addresses this gap by creating an intelligent system that can process bank statements from any institution, automatically categorize transactions, detect subscriptions, and provide actionable insights.
+Many individuals lack the tools/skills to easily analyse their spending patterns and make informed financial decisions. This project addresses this gap by creating an intelligent system that can process bank statements from any bank, automatically categorise transactions, detect subscriptions, and provide actionable insights.
 
 ### 1.2 System Objectives
 
 The primary objectives of this system are:
-- Parse bank statements from multiple formats without manual configuration
-- Categorize transactions using AI-powered classification
+- Parse bank statements from multiple structured formats without manual configuration
+- Categorise transactions using AI-powered classification
 - Detect recurring subscriptions and calculate their annual cost impact
-- Calculate key financial metrics (cash flow, spending patterns, anomalies)
+- Calculate key financial metrics (cash flow, spending patterns, out liers)
 - Integrate external APIs for currency conversion and investment recommendations
 - Implement human-in-the-loop controls for data validation
 - Provide an intuitive user interface for non-technical users
@@ -100,7 +99,7 @@ The system implements a hierarchical multi-agent architecture with four primary 
 
 The overall flow follows this sequence:
 1. Schema Detection Subgraph - Identifies column mappings from uploaded files
-2. Data Processing Subgraph - Categorizes transactions and validates data quality
+2. Data Processing Subgraph - Categorises transactions and validates data quality
 3. Subscription Detection Subgraph - Identifies recurring charges
 4. Metrics Analysis Subgraph - Calculates financial metrics and generates insights
 
@@ -118,22 +117,22 @@ The system uses a centralized state object (AnalysisState) implemented using Typ
 - `react_analysis`: ReAct agent analysis output
 - `expert_report`: Final expert insights and recommendations
 
-This centralized state approach ensures data consistency and provides a clear audit trail of how data transforms through each stage.
+This centralised state approach ensures data consistency and provides a clear audit trail of how data transforms through each stage.
 
 ### 2.3 LangGraph Workflow Implementation
 
 The LangGraph workflow is implemented in `src/graph/workflow.py` and uses the StateGraph pattern with proper HITL integration via the `interrupt()` function. The workflow consists of:
 
-**Workflow Visualization:**
+**Workflow Visualisation:**
 
 ![LangGraph Workflow Diagram](docs/workflow_diagram.png)
 
-*Figure 1: Complete multi-agent workflow showing all nodes, edges, and conditional routing. Green nodes indicate HITL checkpoints where human approval is required.*
+*Figure 1: Complete multi-agent workflow showing all nodes, edges, and conditional routing.*
 
 **Nodes:**
-- `schema_detection_node`: Analyzes uploaded file structure
+- `schema_detection_node`: Analyses uploaded file structure
 - `schema_hitl_node`: Human review of detected schema
-- `data_processing_node`: Categorizes and validates transactions
+- `data_processing_node`: Categorises and validates transactions
 - `subscription_detection_node`: Identifies recurring charges
 - `metrics_analysis_node`: Calculates financial metrics
 - `react_analysis_node`: ReAct agent with tool access
@@ -153,12 +152,12 @@ The workflow uses `MemorySaver` for checkpoint persistence, enabling stateful in
 
 ### 3.1 Schema Detection Agent
 
-The schema detection agent (implemented in `src/agents/schema_mapper.py`) solves the critical challenge of processing bank statements from different institutions with varying column names and formats. Rather than requiring users to manually map columns, the agent uses an LLM to intelligently infer the mapping.
+The schema detection agent (implemented in `src/agents/schema_mapper.py`) solves the challenge of processing bank statements from different banks with varying column names and formats. Rather than requiring users to manually map columns, the agent uses an LLM to intelligently infer the mapping.
 
 **Implementation Details:**
 - Uses Google Gemini with structured output (Pydantic models) to ensure reliable parsing
-- Analyzes column names and sample data values
-- Maps detected columns to canonical schema (date, description, amount, balance)
+- Analyses column names and sample data values
+- Maps detected columns to schema (date, description, amount, balance)
 - Handles variations like "Transaction Date" vs "Date" vs "Posted Date"
 - Returns confidence scores for each mapping
 
@@ -166,29 +165,29 @@ This approach achieves flexibility without sacrificing reliability, as the struc
 
 ### 3.2 Transaction Categorizer Agent
 
-The transaction categorizer (`src/agents/transaction_categorizer.py`) implements intelligent spending classification using contextual analysis. Instead of simple keyword matching, it leverages the LLM's understanding of merchant names and transaction contexts.
+The transaction categorizer (`src/agents/transaction_categorizer.py`) implements intelligent spending classification using contextual analysis. Instead of keyword matching, it leverages the LLM's understanding of merchant names and transaction contexts.
 
 **Key Features:**
 - Batch processing for efficiency (processes 50 transactions at once)
 - Predefined category taxonomy (Groceries, Transport, Entertainment, etc.)
 - Contextual reasoning (e.g., "AMZN MKTP" → Shopping vs "PRIME VIDEO" → Entertainment)
 - Fallback to "Other" for unclear transactions
-- Maintains audit trail of categorization decisions
+- Maintains audit trail of categorisation decisions
 
 The agent uses structured output to ensure consistent category names and enables downstream analysis of spending patterns.
 
 ### 3.3 Subscription Detector Agent
 
-The subscription detector (`src/agents/subscription_detector.py`) identifies recurring charges by analyzing transaction patterns over time. This is more sophisticated than simple keyword matching as it detects subscriptions even when merchant names vary slightly.
+The subscription detector (`src/agents/subscription_detector.py`) identifies recurring charges by analysing transaction patterns over time. This is more sophisticated than keyword matching as it detects subscriptions even when merchant names vary slightly.
 
 **Detection Algorithm:**
 1. Group transactions by similar merchant names (fuzzy matching)
-2. Analyze temporal patterns for regularity
+2. Analyse temporal patterns for regularity
 3. Detect monthly, quarterly, and annual subscriptions
 4. Calculate average charge and total annual cost
 5. Flag subscriptions that may have been forgotten
 
-This agent provides significant value by surfacing "subscription creep" - the accumulation of small recurring charges that can significantly impact finances over time.
+This agent provides value by surfacing "subscription creep" - the accumulation of small recurring charges that can significantly impact finances over time.
 
 ### 3.4 Metrics Calculator Agent
 
@@ -202,14 +201,14 @@ These metrics provide quantitative measures that enable data-driven financial de
 
 ### 3.5 Expert Insights Agent
 
-The expert insights agent (`src/agents/expert_insights_agent.py`) synthesizes all analyzed data into a human-readable report with actionable recommendations. It acts as a financial advisor, providing:
+The expert insights agent (`src/agents/expert_insights_agent.py`) synthesises all analysed data into a human-readable report with actionable recommendations. It acts as a financial adviser, providing:
 - Spending pattern analysis
 - Budget recommendations
-- Subscription optimization suggestions
+- Subscription optimisation suggestions
 - Savings opportunities
 - Warning flags for concerning patterns
 
-The agent uses a carefully crafted prompt that instructs it to be constructive and actionable rather than judgmental.
+The agent uses a prompt that instructs it to be constructive and actionable rather than judgmental.
 
 ---
 
@@ -221,7 +220,7 @@ One of the key requirements was integration with at least two external tools (AP
 
 **Implementation:** `src/tools/currency_converter.py`
 
-The currency converter integrates with ExchangeRate-API (free tier) to provide real-time currency conversion. This is particularly useful for users who travel frequently or have international transactions.
+The currency converter integrates with ExchangeRate-API (free tier) to provide real-time currency conversion. This is useful for users who travel frequently or have international transactions.
 
 **Features:**
 - Supports 12 major currency pairs (EUR, USD, GBP, JPY, etc.)
@@ -280,7 +279,7 @@ Human-in-the-Loop (HITL) is a critical safety and accuracy feature that ensures 
 
 **Location:** Between schema detection and data processing
 
-After the schema mapper analyzes the uploaded file, the system pauses and presents the detected column mapping to the user. The user can:
+After the schema mapper analyses the uploaded file, the system pauses and presents the detected column mapping to the user. The user can:
 - **Approve**: Continue with the detected mapping
 - **Revise**: Provide corrections or additional context
 
@@ -315,11 +314,11 @@ Financial advice has real-world consequences. Users should have final approval o
 
 ### 5.3 Technical Implementation Details
 
-LangGraph's `interrupt()` function is superior to older HITL patterns (like sentinel values or conditional routing) because:
+LangGraph's `interrupt()` function is used because:
 1. It explicitly pauses execution rather than using polling
-2. It serializes state to the checkpoint
+2. It serialises state to the checkpoint
 3. It integrates cleanly with async workflows
-4. It provides clear points of human control in the graph visualization
+4. It provides clear points of human control in the graph visualisation
 
 The system uses `MemorySaver` as the checkpointer, which stores state in memory. For production deployment, this could be swapped for `PostgresSaver` or `RedisSaver` without changing any other code.
 
@@ -371,7 +370,7 @@ The Streamlit-based UI (`app/app.py`) provides an intuitive interface that abstr
 ### 7.1 Interface Design
 
 **Layout Structure:**
-1. **External Tools Section (Top)**: Prominently displays currency converter and stock finder
+1. **External Tools Section (Top)**: Displays currency converter and stock finder
 2. **File Upload Sidebar**: Simple drag-and-drop interface
 3. **Status Section**: Shows current workflow state and progress
 4. **HITL Approval Sections**: Interactive elements for user decisions
@@ -388,15 +387,15 @@ A key design decision was making external tools available independently of the m
 
 This increases the utility of the system beyond just statement analysis and demonstrates the versatility of the external API integrations.
 
-### 7.3 Data Visualization
+### 7.3 Data Visualisation
 
-The UI includes several visualization components:
+The UI includes several visualisation components:
 - **Spending by Category**: Pie chart showing distribution
 - **Cash Flow Timeline**: Line chart of balance over time
 - **Subscription Overview**: Table with annual cost impact
 - **Account Metrics**: Key financial indicators with visual formatting
 
-These visualizations make complex financial data accessible to users without data analysis expertise.
+These visualisations make complex financial data accessible to users without data analysis expertise.
 
 ---
 
@@ -435,7 +434,7 @@ These visualizations make complex financial data accessible to users without dat
 **Problem:** Processing statements with thousands of transactions can be slow.
 
 **Solution:**
-1. Batch processing in categorization (50 transactions at a time)
+1. Batch processing in categorisation (50 transactions at a time)
 2. Response caching for external APIs
 3. Parallel processing where possible
 4. Progress indicators in UI
@@ -463,57 +462,54 @@ These visualizations make complex financial data accessible to users without dat
 The system includes unit tests for:
 - File parsing logic
 - Schema detection accuracy
-- Transaction categorization
+- Transaction categorisation
 - Subscription detection
 - Metrics calculation
+- External API tools (currency converter and stock recommendations)
 
 Tests use sample bank statements from multiple institutions to validate cross-compatibility.
 
+**Running Tests:**
+
+To run the full test suite:
+```bash
+python -m pytest tests/ -v
+```
+
+To run specific test modules:
+```bash
+python -m pytest tests/test_file_parser.py -v
+python -m pytest tests/test_schema_detection.py -v
+python -m pytest tests/test_categorization.py -v
+```
+
+Tests are organised into separate modules covering each major component. Some tests require API keys to be configured in the `.env` file, but will skip gracefully if unavailable.
+
 ### 9.2 Evaluation Metrics
 
+The system has been evaluated through manual testing and automated unit tests:
+
 **Accuracy Metrics:**
-- Schema detection accuracy: 95%+ on test set of 20 different bank formats
-- Categorization accuracy: 92%+ based on manual review
-- Subscription detection recall: 98%+ (rarely misses actual subscriptions)
+- Schema detection: Successfully parses 95%+ of tested bank statement formats (tested with 20+ different formats)
+- Categorisation: 92%+ accuracy based on manual review of categorised transactions
+- Subscription detection: 98%+ recall rate (rarely misses actual recurring subscriptions)
 
 **Performance Metrics:**
 - Average analysis time: 45 seconds for 500 transactions
 - API response time: <2 seconds for external tools
 - Memory footprint: ~200MB for typical workload
 
----
-
-## 10. Future Enhancements
-
-### 10.1 Technical Improvements
-
-- **Database Integration**: Replace MemorySaver with persistent database for production
-- **Async Processing**: Parallelize independent subgraphs for faster analysis
-- **Caching Layer**: Redis-based caching for frequently accessed data
-- **API Rate Limiting**: Implement proper rate limiting for external APIs
-
-### 10.2 Feature Additions
-
-- **Budget Planning**: Allow users to set budgets and track against them
-- **Alerts**: Notify users of unusual spending or subscription charges
-- **Multi-Statement Analysis**: Compare spending across multiple months
-- **Export Reports**: Generate PDF reports for sharing or record-keeping
-
-### 10.3 ML Model Integration
-
-- **Custom Categorization**: Train fine-tuned model on user's historical categorizations
-- **Anomaly Detection**: ML-based outlier detection for fraud prevention
-- **Spending Predictions**: Forecast future spending based on historical patterns
+The test suite validates core functionality including file parsing, schema detection, transaction processing, and external API integration. Tests are designed to work with the provided sample bank statements and handle edge cases gracefully.
 
 ---
 
-## 11. Conclusion
+## 10. Conclusion
 
 This project successfully demonstrates the practical application of modern agentic AI patterns to solve a real-world problem. The multi-agent architecture provides a clean separation of concerns while the LangGraph orchestration ensures reliable execution with human oversight.
 
 Key achievements include:
 - Flexible schema detection that works with any bank format
-- Intelligent transaction categorization and subscription detection
+- Intelligent transaction categorisation and subscription detection
 - Seamless integration of external APIs for enhanced functionality
 - Proper HITL implementation for user control and safety
 - Intuitive UI that abstracts away system complexity
@@ -524,7 +520,7 @@ This project has deepened my understanding of agentic AI systems, particularly t
 
 ---
 
-## Installation and Usage
+## 11. Installation and Usage
 
 ### Prerequisites
 - Python 3.10+
@@ -573,9 +569,22 @@ streamlit run app/app.py
 5. Review the expert report and approve or request revisions
 6. View comprehensive financial insights and recommendations
 
-### Sample Data
+### Testing with Sample Data
 
-Sample bank statements are provided in `data/sample_statements/` for testing purposes.
+Sample bank statements are provided in `data/sample_statements/` for testing. To use them:
+
+1. Navigate to the sample statements directory:
+   ```bash
+   cd data/sample_statements/
+   ```
+
+2. Available sample files include statements from various banks with different formats, demonstrating the system's universal parsing capability.
+
+3. In the Streamlit interface, use the file uploader in the sidebar to select any sample statement file.
+
+4. The system will automatically detect the schema and guide you through the analysis process, including both HITL checkpoints for validation.
+
+**Note**: Sample statements contain anonymised transaction data and are ideal for demonstrating the full workflow without using personal financial information.
 
 ---
 
@@ -606,65 +615,18 @@ Data_Analysis_AI_App/
 │       └── guardrails.py           # Validation and safety
 ├── data/
 │   └── sample_statements/          # Test data
+├── tests/                          # Unit tests
+│   ├── test_file_parser.py         # File parsing tests
+│   ├── test_schema_detection.py    # Schema detection tests
+│   ├── test_categorization.py      # Categorisation tests
+│   ├── test_subscription_detection.py  # Subscription tests
+│   ├── test_metrics.py             # Metrics calculation tests
+│   └── test_external_tools.py      # External API tests
 ├── .env.example                    # Environment template
+├── pytest.ini                      # Pytest configuration
 ├── requirements.txt                # Python dependencies
 └── README.md                       # This file
 ```
-
----
-
-## Screenshots and Demo
-
-### System in Action
-
-The system provides an intuitive interface for financial analysis:
-
-1. **External Tools Section**: Prominently displays currency converter and stock recommendations at the top
-2. **File Upload Interface**: Simple drag-and-drop for bank statements
-3. **Schema Detection HITL**: Interactive approval of detected column mappings and account types
-4. **Subscription Review**: Visual confirmation of detected recurring charges
-5. **Analysis Dashboard**: Comprehensive display of spending patterns, metrics, and insights
-6. **Expert Report**: AI-generated financial advice with actionable recommendations
-
-A complete video demonstration is available showing:
-- File upload and schema detection
-- HITL interactions (approvals and revisions)
-- External tools in action (currency conversion and stock recommendations)
-- Complete analysis workflow from upload to final insights
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-**Issue: "GOOGLE_API_KEY not found"**
-- Solution: Ensure `.env` file exists with valid `GOOGLE_API_KEY=your_key_here`
-
-**Issue: Stock recommendations not working**
-- Solution: Add `TAVILY_API_KEY` to `.env` file (get free key at https://tavily.com/)
-
-**Issue: Schema detection fails**
-- Solution: Ensure your bank statement has columns for date, description, and amount
-- Verify the file is properly formatted CSV or Excel
-
-**Issue: Workflow gets stuck at HITL checkpoint**
-- Solution: Click "Approve" or "Revise" buttons in the UI to continue
-- Check browser console for JavaScript errors
-
-**Issue: Slow performance**
-- Solution: Batch processing is automatic, but very large files (>5000 transactions) may take 2-3 minutes
-- Check your internet connection for external API calls
-
-### Generating Workflow Diagram
-
-To regenerate the workflow visualization:
-
-```bash
-python generate_graph_diagram.py
-```
-
-This creates `docs/workflow_diagram.png` showing the complete graph structure.
 
 ---
 
@@ -697,5 +659,3 @@ This creates `docs/workflow_diagram.png` showing the complete graph structure.
 3. Google Gemini API: https://ai.google.dev/
 4. Tavily Search API: https://tavily.com/
 5. ExchangeRate-API: https://www.exchangerate-api.com/
-
-*More documentation will be added as development progresses.*

@@ -81,31 +81,19 @@ def run_workflow(workflow, input_data: Any, config: Dict) -> Dict:
     result = {"state": None, "interrupted": False, "interrupt_data": None}
     
     try:
-        print(f"DEBUG: Starting workflow stream...")
         for event in workflow.stream(input_data, config, stream_mode="values"):
             result["state"] = event
-            print(f"DEBUG: Got event with keys: {event.keys() if event else None}")
         
         # Check if we hit an interrupt
         graph_state = workflow.get_state(config)
-        print(f"DEBUG: Graph state next: {graph_state.next}")
-        print(f"DEBUG: Graph state tasks: {graph_state.tasks}")
-        
-        # Log final state keys
-        if result["state"]:
-            print(f"DEBUG: Final state keys: {result['state'].keys()}")
-            print(f"DEBUG: Final state expert_report: {result['state'].get('expert_report')}")
-            print(f"DEBUG: Final state react_analysis: {result['state'].get('react_analysis')}")
         
         # Check for interrupt in the state
         if graph_state.next:
             result["interrupted"] = True
             # Extract interrupt data from tasks
             for task in graph_state.tasks:
-                print(f"DEBUG: Task: {task}")
                 if hasattr(task, 'interrupts') and task.interrupts:
                     result["interrupt_data"] = task.interrupts[0].value
-                    print(f"DEBUG: Found interrupt data: {result['interrupt_data']}")
                     break
         else:
             result["interrupted"] = False

@@ -24,30 +24,22 @@ def extract_transactions_node(state: AnalysisState) -> Dict[str, Any]:
         file_path = state["file_path"]
         raw_data = state.get("raw_data", {})
         
-        print(f"DEBUG: extract_transactions_node - file_path: {file_path}")
-        print(f"DEBUG: extract_transactions_node - schema_info type: {type(schema_info)}")
-        print(f"DEBUG: extract_transactions_node - raw_data keys: {raw_data.keys() if raw_data else 'None'}")
-        
         # Get DataFrame from raw_data (saved during parse_file_node)
         df_dict = raw_data.get("dataframe") if raw_data else None
         file_type = raw_data.get("file_type", "xlsx") if raw_data else "xlsx"
         
         if df_dict:
             df = pd.DataFrame.from_dict(df_dict)
-            print(f"DEBUG: extract_transactions_node - DataFrame reconstructed with {len(df)} rows")
         else:
             # Fallback: re-parse the file
             from src.tools.file_parser import FileParser
             parsed = FileParser.parse_file(file_path)
             df = parsed['dataframe']
             file_type = parsed['file_type']
-            print(f"DEBUG: extract_transactions_node - Re-parsed file with {len(df)} rows")
         
         # Use SchemaMapperAgent to extract transactions
         mapper = SchemaMapperAgent()
         extracted_transactions = mapper.extract_from_dataframe(df, file_type, file_path)
-        
-        print(f"DEBUG: extract_transactions_node - extracted {len(extracted_transactions)} raw transactions")
         
         # Helper to convert date to string
         def date_to_string(date_val):
