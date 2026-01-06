@@ -100,6 +100,11 @@ reports/*.html
 *.temp
 .cache/
 temp/
+temp_check/
+
+# Submission package
+Data_Analysis_AI_App_Submission.zip
+*_Submission.zip
 
 # OS files
 Thumbs.db

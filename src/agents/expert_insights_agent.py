@@ -247,7 +247,10 @@ class ExpertInsightsAgent:
         })
         
         for tx in cc_transactions:
-            account_name = tx.get("account_name", "Unknown Card")
+            account_name = tx.get("account_type", tx.get("account_name", "Credit Card"))
+            # Make account name more readable
+            if account_name:
+                account_name = account_name.replace("_", " ").title()
             amount = float(tx.get("amount", 0.0))
             
             cc_accounts[account_name]["transaction_count"] += 1

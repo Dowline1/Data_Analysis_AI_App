@@ -59,6 +59,7 @@ This project implements a multi-agent financial analysis system using LangGraph 
 | ReAct Agent | 5 tools (3 local + 2 external) |
 | Guardrails | Input validation + PII detection |
 | Reflection Loop | Expert report approval/revision |
+| Dynamic Chat Interface | Tool-equipped chat agent with calculations & charts |
 | Web Interface | Streamlit dashboard |
 
 ---
@@ -529,9 +530,9 @@ This project has deepened my understanding of agentic AI systems, particularly t
 
 ### Setup
 
-1. Clone the repository:
+1. Extract the project files:
 ```bash
-git clone <repository-url>
+# Extract the submission zip file to your desired location
 cd Data_Analysis_AI_App
 ```
 
